@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "pico_driver", "pico_driver\
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "pico_test_app", "pico_test_app\pico_test_app.vcxproj", "{C6707B84-763B-4A5B-8139-F7E2715F01DA}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "pico_test_mfc", "pico_test_mfc\pico_test_mfc.vcxproj", "{B714D20B-671E-AFED-250E-7321ACE955BB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM64 = Debug|ARM64
@@ -35,6 +37,14 @@ Global
 		{C6707B84-763B-4A5B-8139-F7E2715F01DA}.Release|ARM64.Build.0 = Release|x64
 		{C6707B84-763B-4A5B-8139-F7E2715F01DA}.Release|x64.ActiveCfg = Release|x64
 		{C6707B84-763B-4A5B-8139-F7E2715F01DA}.Release|x64.Build.0 = Release|x64
+		{B714D20B-671E-AFED-250E-7321ACE955BB}.Debug|ARM64.ActiveCfg = Debug|x64
+		{B714D20B-671E-AFED-250E-7321ACE955BB}.Debug|ARM64.Build.0 = Debug|x64
+		{B714D20B-671E-AFED-250E-7321ACE955BB}.Debug|x64.ActiveCfg = Debug|x64
+		{B714D20B-671E-AFED-250E-7321ACE955BB}.Debug|x64.Build.0 = Debug|x64
+		{B714D20B-671E-AFED-250E-7321ACE955BB}.Release|ARM64.ActiveCfg = Release|x64
+		{B714D20B-671E-AFED-250E-7321ACE955BB}.Release|ARM64.Build.0 = Release|x64
+		{B714D20B-671E-AFED-250E-7321ACE955BB}.Release|x64.ActiveCfg = Release|x64
+		{B714D20B-671E-AFED-250E-7321ACE955BB}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -24,8 +24,8 @@ Environment:
 void DumpBuffer(WDFMEMORY hMem, size_t len) {
     size_t size;
     PUCHAR p = (PUCHAR)WdfMemoryGetBuffer(hMem, &size);
-    for (size_t i = 0; i < len && i < size; i++) DbgPrint("%02X ", p[i]);
-    DbgPrint("\n");
+    for (size_t i = 0; i < len && i < size; i++) DbgPrint("[pico_driver] %02X ", p[i]);
+    DbgPrint("[pico_driver] \n");
 }
 
 NTSTATUS
@@ -81,7 +81,7 @@ Return Value:
                  );
 
     if( !NT_SUCCESS(status) ) {
-        DbgPrint("WdfIoQueueCreate failed 0x%x\n", status);
+        DbgPrint("[pico_driver] WdfIoQueueCreate failed 0x%x\n", status);
         return status;
     }
 
@@ -121,7 +121,7 @@ Return Value:
 
 --*/
 {
-    DbgPrint("[%s] Queue 0x%p, Request 0x%p OutputBufferLength %d InputBufferLength %d IoControlCode 0x%x\n",
+    DbgPrint("[pico_driver][%s] Queue 0x%p, Request 0x%p OutputBufferLength %d InputBufferLength %d IoControlCode 0x%x\n",
                 __FUNCTION__, Queue, Request, (int) OutputBufferLength, (int) InputBufferLength, IoControlCode);
 
     WDFDEVICE device = WdfIoQueueGetDevice(Queue);
@@ -130,71 +130,66 @@ Return Value:
 
     switch (IoControlCode) {
         case IOCTL_PICO_TEST_WRITE: {
-            DbgPrint("IOCTL_PICO_TEST_WRITE received\n");
+            DbgPrint("[pico_driver] IOCTL_PICO_TEST_WRITE received\n");
 
             // Validate that the write pipe is available
             if (pDeviceContext->WritePipe == NULL) {
-                DbgPrint("ERROR: WritePipe is NULL - device not ready for writing\n");
+                DbgPrint("[pico_driver] ERROR: WritePipe is NULL - device not ready for writing\n");
                 status = STATUS_DEVICE_NOT_READY;
                 WdfRequestComplete(Request, status);
                 return;
             }
 
-            // Retrieve the input buffer memory handle from the IOCTL request
-            // This memory contains the data to be sent to the Pico device
-            WDFMEMORY memoryHandle = NULL;
-            status = WdfRequestRetrieveInputMemory(Request, &memoryHandle);
-
-            DumpBuffer(memoryHandle, InputBufferLength);
+            // Retrieve the input buffer
+            PUCHAR inputBuffer = NULL;
+            status = WdfRequestRetrieveInputBuffer(Request, InputBufferLength, (PVOID*)&inputBuffer, NULL);
 
             if (!NT_SUCCESS(status)) {
-                DbgPrint("ERROR: WdfRequestRetrieveInputMemory failed 0x%x\n", status);
+                DbgPrint("[pico_driver] ERROR: WdfRequestRetrieveInputBuffer failed 0x%x\n", status);
                 WdfRequestComplete(Request, status);
                 return;
             }
 
-            // Format the WDF request for bulk write operation
-            // This prepares the request to be sent to the USB device via the write pipe
-            // The memory handle specifies where the data to be written is located
-            status = WdfUsbTargetPipeFormatRequestForWrite(
+            DbgPrint("[pico_driver] Input buffer retrieved, %d bytes\n", (int)InputBufferLength);
+
+            // Create memory descriptor
+            WDF_MEMORY_DESCRIPTOR memDesc;
+            WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&memDesc, inputBuffer, (ULONG)InputBufferLength);
+
+            // Set up timeout options (3 seconds)
+            WDF_REQUEST_SEND_OPTIONS sendOptions;
+            WDF_REQUEST_SEND_OPTIONS_INIT(&sendOptions, 0);
+            sendOptions.Timeout = WDF_REL_TIMEOUT_IN_MS(3000);
+
+            // Send data synchronously
+            ULONG bytesWritten = 0;
+            DbgPrint("[pico_driver] Calling WdfUsbTargetPipeWriteSynchronously with 3sec timeout...\n");
+
+            status = WdfUsbTargetPipeWriteSynchronously(
                 pDeviceContext->WritePipe,
-                Request,
-                memoryHandle,
-                NULL  // No additional memory offset needed
+                WDF_NO_HANDLE,
+                &sendOptions,  // 3sec timeout 
+                &memDesc,
+                &bytesWritten
             );
 
+            DbgPrint("[pico_driver] WdfUsbTargetPipeWriteSynchronously returned status 0x%x, bytes written: %d\n", status, bytesWritten);
+
             if (!NT_SUCCESS(status)) {
-                DbgPrint("ERROR: WdfUsbTargetPipeFormatRequestForWrite failed 0x%x\n", status);
-                WdfRequestComplete(Request, status);
-                return;
+                DbgPrint("[pico_driver] ERROR: WdfUsbTargetPipeWriteSynchronously failed 0x%x\n", status);
+            } else {
+                DbgPrint("[pico_driver] Write successful, sent %d bytes\n", bytesWritten);
             }
 
-            DbgPrint("Request formatted for write operation (%d bytes)\n", (int)InputBufferLength);
-
-            // Actually send the formatted request to the USB device
-            // WDF_REQUEST_SEND_OPTION_SYNCHRONOUS means this call will wait for completion
-            WDF_REQUEST_SEND_OPTIONS sendOptions;
-            WDF_REQUEST_SEND_OPTIONS_INIT(&sendOptions, WDF_REQUEST_SEND_OPTION_SYNCHRONOUS);
-
-            if (!WdfRequestSend(Request, WdfUsbTargetPipeGetIoTarget(pDeviceContext->WritePipe), &sendOptions)) {
-                // If WdfRequestSend returns FALSE, retrieve the completion status
-                status = WdfRequestGetStatus(Request);
-                DbgPrint("ERROR: WdfRequestSend failed with status 0x%x\n", status);
-                WdfRequestComplete(Request, status);
-                return;
-            }
-
-            // Request was successfully sent and completed (synchronous mode)
-            DbgPrint("Write request successfully sent to device\n");
-            return;
+            break;
         }
 
         case IOCTL_PICO_TEST_READ: {
-            DbgPrint("IOCTL_PICO_TEST_READ received\n");
+            DbgPrint("[pico_driver] IOCTL_PICO_TEST_READ received\n");
 
             // Validate that the read pipe is available
             if (pDeviceContext->ReadPipe == NULL) {
-                DbgPrint("ERROR: ReadPipe is NULL - device not ready for reading\n");
+                DbgPrint("[pico_driver] ERROR: ReadPipe is NULL - device not ready for reading\n");
                 status = STATUS_DEVICE_NOT_READY;
                 WdfRequestComplete(Request, status);
                 return;
@@ -206,7 +201,7 @@ Return Value:
             status = WdfRequestRetrieveOutputMemory(Request, &memoryHandle);
 
             if (!NT_SUCCESS(status)) {
-                DbgPrint("ERROR: WdfRequestRetrieveOutputMemory failed 0x%x\n", status);
+                DbgPrint("[pico_driver] ERROR: WdfRequestRetrieveOutputMemory failed 0x%x\n", status);
                 WdfRequestComplete(Request, status);
                 return;
             }
@@ -222,12 +217,12 @@ Return Value:
             );
 
             if (!NT_SUCCESS(status)) {
-                DbgPrint("ERROR: WdfUsbTargetPipeFormatRequestForRead failed 0x%x\n", status);
+                DbgPrint("[pico_driver] ERROR: WdfUsbTargetPipeFormatRequestForRead failed 0x%x\n", status);
                 WdfRequestComplete(Request, status);
                 return;
             }
 
-            DbgPrint("Request formatted for read operation (max %d bytes)\n", (int)OutputBufferLength);
+            DbgPrint("[pico_driver] Request formatted for read operation (max %d bytes)\n", (int)OutputBufferLength);
 
             // Actually send the formatted request to the USB device
             // WDF_REQUEST_SEND_OPTION_SYNCHRONOUS means this call will wait for completion
@@ -237,22 +232,23 @@ Return Value:
             if (!WdfRequestSend(Request, WdfUsbTargetPipeGetIoTarget(pDeviceContext->ReadPipe), &sendOptions)) {
                 // If WdfRequestSend returns FALSE, retrieve the completion status
                 status = WdfRequestGetStatus(Request);
-                DbgPrint("ERROR: WdfRequestSend failed with status 0x%x\n", status);
+                DbgPrint("[pico_driver] ERROR: WdfRequestSend failed with status 0x%x\n", status);
                 WdfRequestComplete(Request, status);
                 return;
             }
 
             // Request was successfully sent and completed (synchronous mode)
-            DbgPrint("Read request successfully sent to device\n");
-            return;
+            DbgPrint("[pico_driver] Read request successfully sent to device\n");
+            break;
         }
 
         default:
-            DbgPrint("Unknown IOCTL code: 0x%x\n", IoControlCode);
+            DbgPrint("[pico_driver] Unknown IOCTL code: 0x%x\n", IoControlCode);
             status = STATUS_INVALID_DEVICE_REQUEST;
-            WdfRequestComplete(Request, status);
-            return;
+            break;
     }
+
+    WdfRequestComplete(Request, status);
     return;
 }
 
@@ -285,7 +281,7 @@ Return Value:
 
 --*/
 {
-    DbgPrint("[%s] Queue 0x%p, Request 0x%p ActionFlags %d\n",
+    DbgPrint("[pico_driver][%s] Queue 0x%p, Request 0x%p ActionFlags %d\n",
                 __FUNCTION__, Queue, Request, ActionFlags);
 
     //

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <winioctl.h>
 #include <initguid.h>
 #include <setupapi.h>
 #include <cfgmgr32.h>
