@@ -21,6 +21,7 @@ Environment:
 #include <wdfusb.h>
 #include <initguid.h>
 
+#include "../include/Public.h"
 #include "device.h"
 #include "queue.h"
 #include "trace.h"

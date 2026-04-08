@@ -19,8 +19,12 @@ Environment:
 // Define an Interface Guid so that app can find the device and talk to it.
 //
 
+#ifdef INITGUID
 DEFINE_GUID (GUID_DEVINTERFACE_picodriver,
     0x5202bf06,0x5a10,0x4c9f,0xa3,0xd0,0x7d,0x6b,0xfb,0xc3,0xd6,0x29);
+#else
+EXTERN_C const GUID GUID_DEVINTERFACE_picodriver;
+#endif
 // {5202bf06-5a10-4c9f-a3d0-7d6bfbc3d629}
 
 //
