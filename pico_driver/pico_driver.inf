@@ -1,0 +1,70 @@
+;
+; pico_driver.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=USBDevice
+ClassGuid={88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider=%ManufacturerName%
+CatalogFile=pico_driver.cat
+DriverVer=
+PnpLockDown=1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+pico_driver.sys  = 1,,
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%pico_driver.DeviceDesc%=pico_driver_Device, USB\VID_CAFE&PID_4005
+
+[pico_driver_Device.NT]
+CopyFiles=File_Copy
+
+[File_Copy]
+pico_driver.sys
+
+[pico_driver_Device.NT.HW]
+AddReg=pico_driver_AddReg
+
+[pico_driver_AddReg]
+; By default, USBDevice class uses iProduct descriptor to name the device
+; Uncomment for this device to use %pico_driver.DeviceDesc%
+;HKR,,FriendlyName,,%pico_driver.DeviceDesc%
+
+;-------------- Service installation
+[pico_driver_Device.NT.Services]
+AddService = pico_driver,%SPSVCINST_ASSOCSERVICE%, pico_driver_Service_Inst
+
+; -------------- pico_driver driver install sections
+[pico_driver_Service_Inst]
+DisplayName    = %pico_driver.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\pico_driver.sys
+
+[pico_driver_Device.NT.Wdf]
+KmdfService =  pico_driver, pico_driver_wdfsect
+
+[pico_driver_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+DiskName = "pico_driver Installation Disk"
+pico_driver.DeviceDesc = "pico_driver Device"
+pico_driver.SVCDESC = "pico_driver Service"
