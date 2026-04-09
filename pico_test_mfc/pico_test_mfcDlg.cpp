@@ -69,6 +69,7 @@ BEGIN_MESSAGE_MAP(CpicotestmfcDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON1, &CpicotestmfcDlg::OnBnClickedButton1)
 	ON_BN_CLICKED(IDC_BUTTON2, &CpicotestmfcDlg::OnBnClickedButton2)
 	ON_WM_DESTROY()
+	ON_BN_CLICKED(IDC_BUTTON3, &CpicotestmfcDlg::OnBnClickedButton3)
 END_MESSAGE_MAP()
 
 
@@ -165,6 +166,17 @@ HCURSOR CpicotestmfcDlg::OnQueryDragIcon()
 }
 
 
+void CpicotestmfcDlg::OnDestroy()
+{
+	CDialogEx::OnDestroy();
+
+	if (m_hDevice != INVALID_HANDLE_VALUE) {
+		CloseHandle(m_hDevice);
+	}
+}
+
+
+// Event Handler
 void CpicotestmfcDlg::OnBnClickedButton1()
 {
 	// LED ON
@@ -207,11 +219,33 @@ void CpicotestmfcDlg::OnBnClickedButton2()
 	}
 }
 
-void CpicotestmfcDlg::OnDestroy()
+void CpicotestmfcDlg::OnBnClickedButton3()
 {
-	CDialogEx::OnDestroy();
+	// TEMP READ
+	if (m_hDevice == INVALID_HANDLE_VALUE) {
+		MessageBox(_T("Device not connected."), _T("Error"));
+		return;
+	}
 
-	if (m_hDevice != INVALID_HANDLE_VALUE) {
-		CloseHandle(m_hDevice);
+	DWORD bytesReturned = 0;
+	UCHAR command = SENSOR_READ_TEMP;
+	UCHAR outputBuffer[64] = { 0, };
+
+	if (DeviceIoControl(m_hDevice, IOCTL_PICO_READ_TEMP, &command, sizeof(command), &outputBuffer, sizeof(outputBuffer), &bytesReturned, NULL)) {
+		// outputBuffer[0] -> 정수부 (예: 25도)
+		// outputBuffer[1] -> 소수부 (예: 67)
+		// 조합: "25.67"
+		CString tempStr;
+		tempStr.Format(_T("%.2d.%.2d"), outputBuffer[0], outputBuffer[1]);
+
+		GetDlgItem(IDC_EDIT1)->SetWindowText(tempStr);
+		MessageBox(_T("Temperature read successfully!"), _T("Success"));
+	}
+	else {
+		DWORD error = GetLastError();
+		CString msg;
+		msg.Format(_T("READ TEMP - Failed: 0x%08X"), error);
+		MessageBox(msg, _T("Error"));
 	}
 }
+

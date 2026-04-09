@@ -34,13 +34,13 @@ int main()
         Sleep(1500);
 
         // Turn LED OFF
-        //std::cout << "\nTurning LED OFF..." << std::endl;
-        //command = LED_OFF;
-        //if (DeviceIoControl(hDevice, IOCTL_PICO_TEST_WRITE, &command, sizeof(command), NULL, 0, &bytesReturned, NULL)) {
-        //    std::cout << "LED OFF - Success!" << std::endl;
-        //} else {
-        //    std::cerr << "LED OFF - Failed: " << GetLastError() << std::endl;
-        //}
+        std::cout << "\nTurning LED OFF..." << std::endl;
+        command = LED_OFF;
+        if (DeviceIoControl(hDevice, IOCTL_PICO_TEST_WRITE, &command, sizeof(command), NULL, 0, &bytesReturned, NULL)) {
+            std::cout << "LED OFF - Success!" << std::endl;
+        } else {
+            std::cerr << "LED OFF - Failed: " << GetLastError() << std::endl;
+        }
 
         //// Toggle LED
         //std::cout << "\nToggling LED..." << std::endl;

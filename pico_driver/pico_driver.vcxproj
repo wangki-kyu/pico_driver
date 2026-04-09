@@ -27,9 +27,9 @@
     <ClCompile Include="Queue.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\include\Public.h" />
     <ClInclude Include="Device.h" />
     <ClInclude Include="Driver.h" />
-    <ClInclude Include="Public.h" />
     <ClInclude Include="Queue.h" />
     <ClInclude Include="Trace.h" />
   </ItemGroup>

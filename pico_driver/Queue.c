@@ -242,6 +242,103 @@ Return Value:
             break;
         }
 
+        case IOCTL_PICO_READ_TEMP: {
+            DbgPrint("[pico_driver] IOCTL_PICO_READ_TEMP received\n");
+
+            // Validate that both pipes are available
+            if (pDeviceContext->WritePipe == NULL) {
+                DbgPrint("[pico_driver] ERROR: WritePipe is NULL - device not ready\n");
+                status = STATUS_DEVICE_NOT_READY;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            if (pDeviceContext->ReadPipe == NULL) {
+                DbgPrint("[pico_driver] ERROR: ReadPipe is NULL - device not ready\n");
+                status = STATUS_DEVICE_NOT_READY;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Step 1: Send temperature read command (0x10) to the device
+            UCHAR cmdByte = SENSOR_READ_TEMP;
+            WDF_MEMORY_DESCRIPTOR memDescCmd;
+            WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&memDescCmd, &cmdByte, sizeof(cmdByte));
+
+            WDF_REQUEST_SEND_OPTIONS sendOptions;
+            WDF_REQUEST_SEND_OPTIONS_INIT(&sendOptions, 0);
+            sendOptions.Timeout = WDF_REL_TIMEOUT_IN_MS(3000);
+
+            ULONG bytesWritten = 0;
+            DbgPrint("[pico_driver] Sending temperature read command (0x%02x)...\n", cmdByte);
+
+            status = WdfUsbTargetPipeWriteSynchronously(
+                pDeviceContext->WritePipe,
+                WDF_NO_HANDLE,
+                &sendOptions,
+                &memDescCmd,
+                &bytesWritten
+            );
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: Failed to send temperature command 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            DbgPrint("[pico_driver] Temperature command sent successfully (%d bytes)\n", bytesWritten);
+
+            // Step 2: Read temperature data from the device
+            DbgPrint("[pico_driver] OutputBufferLength: %d bytes\n", (int)OutputBufferLength);
+
+            if (OutputBufferLength == 0) {
+                DbgPrint("[pico_driver] ERROR: OutputBufferLength is 0\n");
+                status = STATUS_BUFFER_TOO_SMALL;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            WDFMEMORY memoryHandle = NULL;
+            status = WdfRequestRetrieveOutputMemory(Request, &memoryHandle);
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfRequestRetrieveOutputMemory failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Read temperature data directly from USB pipe
+            WDF_MEMORY_DESCRIPTOR memDescRead;
+            WDF_MEMORY_DESCRIPTOR_INIT_HANDLE(&memDescRead, memoryHandle, NULL);
+
+            WDF_REQUEST_SEND_OPTIONS readOptions;
+            WDF_REQUEST_SEND_OPTIONS_INIT(&readOptions, 0);
+            readOptions.Timeout = WDF_REL_TIMEOUT_IN_MS(1000);
+
+            ULONG bytesRead = 0;
+            DbgPrint("[pico_driver] Reading temperature data from device...\n");
+
+            status = WdfUsbTargetPipeReadSynchronously(
+                pDeviceContext->ReadPipe,
+                WDF_NO_HANDLE,
+                &readOptions,
+                &memDescRead,
+                &bytesRead
+            );
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfUsbTargetPipeReadSynchronously failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            DbgPrint("[pico_driver] Temperature data read successfully, %d bytes received\n", bytesRead);
+
+            // Set the information about how many bytes were read
+            WdfRequestSetInformation(Request, bytesRead);
+            break;
+        }
+
         default:
             DbgPrint("[pico_driver] Unknown IOCTL code: 0x%x\n", IoControlCode);
             status = STATUS_INVALID_DEVICE_REQUEST;
