@@ -72,6 +72,7 @@ BEGIN_MESSAGE_MAP(CpicotestmfcDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON3, &CpicotestmfcDlg::OnBnClickedButton3)
 	ON_BN_CLICKED(IDC_BTN_DMA_LED_ON, &CpicotestmfcDlg::OnBnClickedBtnDmaLedOn)
 	ON_BN_CLICKED(IDC_BTN_DMA_LED_OFF, &CpicotestmfcDlg::OnBnClickedBtnDmaLedOff)
+	ON_BN_CLICKED(IDC_BTN_MODEL_LOAD, &CpicotestmfcDlg::OnBnClickedBtnModelLoad)
 END_MESSAGE_MAP()
 
 
@@ -354,6 +355,118 @@ void CpicotestmfcDlg::OnBnClickedBtnDmaLedOff()
 		CString msg;
 		msg.Format(_T("DMA LED OFF - Failed: 0x%08X"), error);
 		MessageBox(msg, _T("Error"));
+		CloseHandle(overlapped.hEvent);
+	}
+}
+
+void CpicotestmfcDlg::OnBnClickedBtnModelLoad()
+{
+	// Model Load via DMA (Asynchronous with OverlappedIO)
+	// Protocol: [0x20][dataLen_HIGH][dataLen_LOW][ModelData...]
+	if (m_hDevice == INVALID_HANDLE_VALUE) {
+		MessageBox(_T("Device not connected."), _T("Error"));
+		return;
+	}
+
+	// File dialog to select model file
+	CFileDialog fileDlg(TRUE, _T("bin"), _T("*.bin"), OFN_FILEMUSTEXIST,
+		_T("Binary Files (*.bin)|*.bin|All Files (*.*)|*.*||"), this);
+
+	if (fileDlg.DoModal() != IDOK) {
+		return;  // User cancelled
+	}
+
+	// Open file
+	CFile modelFile;
+	if (!modelFile.Open(fileDlg.GetPathName(), CFile::modeRead | CFile::shareDenyWrite)) {
+		MessageBox(_T("Failed to open model file."), _T("Error"));
+		return;
+	}
+
+	ULONGLONG fileSize = modelFile.GetLength();
+
+	// Check size (50KB max)
+	const ULONGLONG MAX_MODEL_SIZE = 60 * 1024;  // 60KB
+	if (fileSize > MAX_MODEL_SIZE) {
+		CString msg;
+		msg.Format(_T("Model file too large: %llu bytes (max %llu bytes)"), fileSize, MAX_MODEL_SIZE);
+		MessageBox(msg, _T("Error"));
+		modelFile.Close();
+		return;
+	}
+
+	// Allocate buffer for protocol: [0x20][HIGH][LOW][ModelData]
+	// Total size = 1 (cmd) + 2 (length) + fileSize
+	DWORD totalSize = 1 + 2 + (DWORD)fileSize;
+	PUCHAR pBuffer = new UCHAR[totalSize];
+
+	if (!pBuffer) {
+		MessageBox(_T("Memory allocation failed."), _T("Error"));
+		modelFile.Close();
+		return;
+	}
+
+	// Build protocol packet
+	pBuffer[0] = 0x20;  // Command byte
+	pBuffer[1] = (UCHAR)((fileSize >> 8) & 0xFF);  // Data length HIGH
+	pBuffer[2] = (UCHAR)(fileSize & 0xFF);         // Data length LOW
+
+	// Read model file data
+	UINT bytesRead = modelFile.Read(&pBuffer[3], (UINT)fileSize);
+	modelFile.Close();
+
+	if ((ULONGLONG)bytesRead != fileSize) {
+		MessageBox(_T("Failed to read complete model file."), _T("Error"));
+		delete[] pBuffer;
+		return;
+	}
+
+	// Create OVERLAPPED structure for asynchronous I/O
+	OVERLAPPED overlapped = {};
+	overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+	if (!overlapped.hEvent) {
+		MessageBox(_T("Failed to create event."), _T("Error"));
+		delete[] pBuffer;
+		return;
+	}
+
+	DWORD bytesReturned = 0;
+
+	// Send model data via DMA write asynchronously
+	if (DeviceIoControl(m_hDevice, IOCTL_PICO_MODEL_LOAD, pBuffer, totalSize,
+		NULL, 0, &bytesReturned, &overlapped)) {
+		// Request completed synchronously
+		MessageBox(_T("Model Load - Success (sync)!"), _T("Success"));
+		delete[] pBuffer;
+		CloseHandle(overlapped.hEvent);
+	}
+	else if (GetLastError() == ERROR_IO_PENDING) {
+		// Request is pending - wait for completion
+		DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 30000);  // 30 second timeout (large file)
+
+		if (waitResult == WAIT_OBJECT_0) {
+			// Operation completed
+			CString msg;
+			msg.Format(_T("Model Load - Success (async)! Size: %llu bytes"), fileSize);
+			MessageBox(msg, _T("Success"));
+		}
+		else if (waitResult == WAIT_TIMEOUT) {
+			MessageBox(_T("Model Load - Timeout!"), _T("Error"));
+		}
+		else {
+			MessageBox(_T("Model Load - Wait failed!"), _T("Error"));
+		}
+
+		delete[] pBuffer;
+		CloseHandle(overlapped.hEvent);
+	}
+	else {
+		DWORD error = GetLastError();
+		CString msg;
+		msg.Format(_T("Model Load - Failed: 0x%08X"), error);
+		MessageBox(msg, _T("Error"));
+		delete[] pBuffer;
 		CloseHandle(overlapped.hEvent);
 	}
 }

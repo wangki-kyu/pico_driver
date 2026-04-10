@@ -40,4 +40,5 @@ public:
 	afx_msg void OnDestroy();
 	afx_msg void OnBnClickedBtnDmaLedOn();
 	afx_msg void OnBnClickedBtnDmaLedOff();
+	afx_msg void OnBnClickedBtnModelLoad();
 };

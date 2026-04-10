@@ -411,6 +411,60 @@ Return Value:
             return;
         }
 
+        case IOCTL_PICO_MODEL_LOAD: {
+            DbgPrint("[pico_driver] IOCTL_PICO_MODEL_LOAD received (size: %d bytes)\n", (int)InputBufferLength);
+
+            if (pDeviceContext->WritePipe == NULL) {
+                DbgPrint("[pico_driver] ERROR: WritePipe is NULL - device not ready for writing\n");
+                status = STATUS_DEVICE_NOT_READY;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Retrieve input memory (DMA - no buffer copy, uses MDL)
+            WDFMEMORY inputMemory = NULL;
+            status = WdfRequestRetrieveInputMemory(Request, &inputMemory);
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfRequestRetrieveInputMemory failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            DbgPrint("[pico_driver] Input memory retrieved for model load\n");
+
+            // Format the request for USB pipe write (asynchronous)
+            status = WdfUsbTargetPipeFormatRequestForWrite(
+                pDeviceContext->WritePipe,
+                Request,
+                inputMemory,
+                NULL
+            );
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfUsbTargetPipeFormatRequestForWrite failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            DbgPrint("[pico_driver] Request formatted for model load operation\n");
+
+            // Set completion routine to handle asynchronous completion
+            WdfRequestSetCompletionRoutine(Request, PicoDmaWriteComplete, NULL);
+
+            // Send the request asynchronously
+            if (!WdfRequestSend(Request, WdfUsbTargetPipeGetIoTarget(pDeviceContext->WritePipe), WDF_NO_SEND_OPTIONS)) {
+                status = WdfRequestGetStatus(Request);
+                DbgPrint("[pico_driver] ERROR: WdfRequestSend failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Asynchronous - completion will be handled by PicoDmaWriteComplete callback
+            DbgPrint("[pico_driver] Model load request sent successfully\n");
+            return;
+        }
+
         default:
             DbgPrint("[pico_driver] Unknown IOCTL code: 0x%x\n", IoControlCode);
             status = STATUS_INVALID_DEVICE_REQUEST;
