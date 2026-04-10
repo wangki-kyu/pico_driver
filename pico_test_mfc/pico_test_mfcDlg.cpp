@@ -70,6 +70,8 @@ BEGIN_MESSAGE_MAP(CpicotestmfcDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON2, &CpicotestmfcDlg::OnBnClickedButton2)
 	ON_WM_DESTROY()
 	ON_BN_CLICKED(IDC_BUTTON3, &CpicotestmfcDlg::OnBnClickedButton3)
+	ON_BN_CLICKED(IDC_BTN_DMA_LED_ON, &CpicotestmfcDlg::OnBnClickedBtnDmaLedOn)
+	ON_BN_CLICKED(IDC_BTN_DMA_LED_OFF, &CpicotestmfcDlg::OnBnClickedBtnDmaLedOff)
 END_MESSAGE_MAP()
 
 
@@ -249,3 +251,109 @@ void CpicotestmfcDlg::OnBnClickedButton3()
 	}
 }
 
+
+void CpicotestmfcDlg::OnBnClickedBtnDmaLedOn()
+{
+	// DMA LED ON (Asynchronous with OverlappedIO)
+	if (m_hDevice == INVALID_HANDLE_VALUE) {
+		MessageBox(_T("Device not connected."), _T("Error"));
+		return;
+	}
+
+	// Create OVERLAPPED structure for asynchronous I/O
+	OVERLAPPED overlapped = {};
+	overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+	if (!overlapped.hEvent) {
+		MessageBox(_T("Failed to create event."), _T("Error"));
+		return;
+	}
+
+	UCHAR command = LED_ON;
+	DWORD bytesReturned = 0;
+
+	// Send DMA write request asynchronously
+	if (DeviceIoControl(m_hDevice, IOCTL_PICO_DMA_WRITE, &command, sizeof(command),
+		NULL, 0, &bytesReturned, &overlapped)) {
+		// Request completed synchronously
+		MessageBox(_T("DMA LED ON - Success (sync)!"), _T("Success"));
+		CloseHandle(overlapped.hEvent);
+	}
+	else if (GetLastError() == ERROR_IO_PENDING) {
+		// Request is pending - wait for completion
+		DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 5000);  // 5 second timeout
+
+		if (waitResult == WAIT_OBJECT_0) {
+			// Operation completed
+			MessageBox(_T("DMA LED ON - Success (async)!"), _T("Success"));
+		}
+		else if (waitResult == WAIT_TIMEOUT) {
+			MessageBox(_T("DMA LED ON - Timeout!"), _T("Error"));
+		}
+		else {
+			MessageBox(_T("DMA LED ON - Wait failed!"), _T("Error"));
+		}
+
+		CloseHandle(overlapped.hEvent);
+	}
+	else {
+		DWORD error = GetLastError();
+		CString msg;
+		msg.Format(_T("DMA LED ON - Failed: 0x%08X"), error);
+		MessageBox(msg, _T("Error"));
+		CloseHandle(overlapped.hEvent);
+	}
+}
+
+void CpicotestmfcDlg::OnBnClickedBtnDmaLedOff()
+{
+	// DMA LED OFF (Asynchronous with OverlappedIO)
+	if (m_hDevice == INVALID_HANDLE_VALUE) {
+		MessageBox(_T("Device not connected."), _T("Error"));
+		return;
+	}
+
+	// Create OVERLAPPED structure for asynchronous I/O
+	OVERLAPPED overlapped = {};
+	overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+	if (!overlapped.hEvent) {
+		MessageBox(_T("Failed to create event."), _T("Error"));
+		return;
+	}
+
+	UCHAR command = LED_OFF;
+	DWORD bytesReturned = 0;
+
+	// Send DMA write request asynchronously
+	if (DeviceIoControl(m_hDevice, IOCTL_PICO_DMA_WRITE, &command, sizeof(command),
+		NULL, 0, &bytesReturned, &overlapped)) {
+		// Request completed synchronously
+		MessageBox(_T("DMA LED OFF - Success (sync)!"), _T("Success"));
+		CloseHandle(overlapped.hEvent);
+	}
+	else if (GetLastError() == ERROR_IO_PENDING) {
+		// Request is pending - wait for completion
+		DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 5000);  // 5 second timeout
+
+		if (waitResult == WAIT_OBJECT_0) {
+			// Operation completed
+			MessageBox(_T("DMA LED OFF - Success (async)!"), _T("Success"));
+		}
+		else if (waitResult == WAIT_TIMEOUT) {
+			MessageBox(_T("DMA LED OFF - Timeout!"), _T("Error"));
+		}
+		else {
+			MessageBox(_T("DMA LED OFF - Wait failed!"), _T("Error"));
+		}
+
+		CloseHandle(overlapped.hEvent);
+	}
+	else {
+		DWORD error = GetLastError();
+		CString msg;
+		msg.Format(_T("DMA LED OFF - Failed: 0x%08X"), error);
+		MessageBox(msg, _T("Error"));
+		CloseHandle(overlapped.hEvent);
+	}
+}

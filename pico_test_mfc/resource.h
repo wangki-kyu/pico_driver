@@ -11,6 +11,9 @@
 #define IDC_BUTTON3                     1001
 #define IDC_EDIT1                       1002
 #define IDC_BUTTON2                     1003
+#define IDC_BTN_DMA_LED_ON              1004
+#define IDC_BUTTON5                     1005
+#define IDC_BTN_DMA_LED_OFF             1005
 
 // Next default values for new objects
 // 

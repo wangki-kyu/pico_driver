@@ -21,6 +21,24 @@ Environment:
 #pragma alloc_text (PAGE, picodriverQueueInitialize)
 #endif
 
+VOID
+PicoDmaWriteComplete(
+    _In_ WDFREQUEST Request,
+    _In_ WDFIOTARGET Target,
+    _In_ PWDF_REQUEST_COMPLETION_PARAMS Params,
+    _In_opt_ WDFCONTEXT Context
+    )
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Context);
+
+    NTSTATUS status = Params->IoStatus.Status;
+    ULONG_PTR bytesWritten = Params->IoStatus.Information;
+
+    DbgPrint("[pico_driver] DMA Write complete: status 0x%x, bytes %llu\n", status, (ULONGLONG)bytesWritten);
+    WdfRequestComplete(Request, status);
+}
+
 void DumpBuffer(WDFMEMORY hMem, size_t len) {
     size_t size;
     PUCHAR p = (PUCHAR)WdfMemoryGetBuffer(hMem, &size);
@@ -337,6 +355,60 @@ Return Value:
             // Set the information about how many bytes were read
             WdfRequestSetInformation(Request, bytesRead);
             break;
+        }
+
+        case IOCTL_PICO_DMA_WRITE: {
+            DbgPrint("[pico_driver] IOCTL_PICO_DMA_WRITE received\n");
+
+            if (pDeviceContext->WritePipe == NULL) {
+                DbgPrint("[pico_driver] ERROR: WritePipe is NULL - device not ready for writing\n");
+                status = STATUS_DEVICE_NOT_READY;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Retrieve input memory (DMA - no buffer copy, uses MDL)
+            WDFMEMORY inputMemory = NULL;
+            status = WdfRequestRetrieveInputMemory(Request, &inputMemory);
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfRequestRetrieveInputMemory failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            DbgPrint("[pico_driver] Input memory retrieved for DMA write\n");
+
+            // Format the request for USB pipe write (asynchronous)
+            status = WdfUsbTargetPipeFormatRequestForWrite(
+                pDeviceContext->WritePipe,
+                Request,
+                inputMemory,
+                NULL  // No additional memory offset needed
+            );
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfUsbTargetPipeFormatRequestForWrite failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            DbgPrint("[pico_driver] Request formatted for DMA write operation\n");
+
+            // Set completion routine to handle asynchronous completion
+            WdfRequestSetCompletionRoutine(Request, PicoDmaWriteComplete, NULL);
+
+            // Send the request asynchronously (DMA mode)
+            if (!WdfRequestSend(Request, WdfUsbTargetPipeGetIoTarget(pDeviceContext->WritePipe), WDF_NO_SEND_OPTIONS)) {
+                status = WdfRequestGetStatus(Request);
+                DbgPrint("[pico_driver] ERROR: WdfRequestSend failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Asynchronous - completion will be handled by PicoDmaWriteComplete callback
+            DbgPrint("[pico_driver] DMA write request sent successfully\n");
+            return;
         }
 
         default:
