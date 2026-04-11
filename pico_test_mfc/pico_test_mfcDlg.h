@@ -3,6 +3,7 @@
 //
 
 #pragma once
+#include <opencv2/core.hpp>
 
 
 // CpicotestmfcDlg 대화 상자
@@ -25,6 +26,7 @@ public:
 protected:
 	HICON m_hIcon;
 	HANDLE m_hDevice;  // Pico driver device handle
+	cv::Mat m_preprocessedImage;  // Preprocessed image for display
 
 	// 생성된 메시지 맵 함수
 	virtual BOOL OnInitDialog();
@@ -41,4 +43,8 @@ public:
 	afx_msg void OnBnClickedBtnDmaLedOn();
 	afx_msg void OnBnClickedBtnDmaLedOff();
 	afx_msg void OnBnClickedBtnModelLoad();
+	afx_msg void OnBnClickedBtnImageLoad();
+
+private:
+	void DisplayImageOnControl(const cv::Mat& img);
 };

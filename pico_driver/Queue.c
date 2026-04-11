@@ -1,4 +1,4 @@
-/*++
+﻿/*++
 
 Module Name:
 
@@ -44,6 +44,170 @@ void DumpBuffer(WDFMEMORY hMem, size_t len) {
     PUCHAR p = (PUCHAR)WdfMemoryGetBuffer(hMem, &size);
     for (size_t i = 0; i < len && i < size; i++) DbgPrint("[pico_driver] %02X ", p[i]);
     DbgPrint("[pico_driver] \n");
+}
+
+// Context structure for inference two-phase operation (write + read)
+typedef struct {
+    WDFREQUEST OriginalRequest;
+    WDFMEMORY OutputMemory;
+    PDEVICE_CONTEXT DeviceContext;
+} INFERENCE_CONTEXT, *PINFERENCE_CONTEXT;
+
+VOID
+PicoInferenceReadComplete(
+    _In_ WDFREQUEST Request,
+    _In_ WDFIOTARGET Target,
+    _In_ PWDF_REQUEST_COMPLETION_PARAMS Params,
+    _In_opt_ WDFCONTEXT Context
+    )
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Context);
+
+    //PINFERENCE_CONTEXT infContext = (PINFERENCE_CONTEXT)Context;
+    NTSTATUS status = Params->IoStatus.Status;
+    ULONG_PTR bytesRead = Params->IoStatus.Information;
+
+    if (status == STATUS_IO_TIMEOUT) {
+        DbgPrint("[pico_driver] Inference Read timed out! Device is not responding\n");
+        WdfRequestComplete(Request, status);
+        return;
+    }
+
+    DbgPrint("[pico_driver] Inference Read complete: status 0x%x, bytes read %llu\n", status, (ULONGLONG)bytesRead);
+
+    if (NT_SUCCESS(status)) {
+        // Get output memory to access the read data
+        //WDFMEMORY outputMemory = NULL;
+        //NTSTATUS retrieveStatus = WdfRequestRetrieveOutputMemory(Request, &outputMemory);
+
+        //if (NT_SUCCESS(retrieveStatus)) {
+        //    // Get buffer pointer
+        //    PUCHAR pData = (PUCHAR)WdfMemoryGetBuffer(outputMemory, NULL);
+
+        //    // Log the read data in hex format (16 bytes per line)
+        //    DbgPrint("[pico_driver] Inference result data (%llu bytes):\n", (ULONGLONG)bytesRead);
+        //    for (ULONG_PTR i = 0; i < bytesRead && i < 256; i++) {
+        //        if (i % 16 == 0) {
+        //            DbgPrint("[pico_driver] %04llX: ", (ULONGLONG)i);
+        //        }
+        //        DbgPrint("%02X ", pData[i]);
+        //        if ((i + 1) % 16 == 0) {
+        //            DbgPrint("\n");
+        //        }
+        //    }
+        //    if (bytesRead % 16 != 0) {
+        //        DbgPrint("\n");
+        //    }
+        //}
+
+        // Set the number of bytes returned to client
+        WdfRequestSetInformation(Request, bytesRead);
+    }
+
+    // Complete the original request with the result
+    WdfRequestComplete(Request, status);
+
+    // Free the temporary read request
+    /*WdfObjectDelete(Request);*/
+
+    // Free context
+    /*ExFreePool(infContext);*/
+}
+
+VOID
+PicoInferenceWriteComplete(
+    _In_ WDFREQUEST Request,
+    _In_ WDFIOTARGET Target,
+    _In_ PWDF_REQUEST_COMPLETION_PARAMS Params,
+    _In_opt_ WDFCONTEXT Context
+    )
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Context);
+
+    //PINFERENCE_CONTEXT infContext = (PINFERENCE_CONTEXT)Context;
+    NTSTATUS status = Params->IoStatus.Status;
+    ULONG_PTR bytesWritten = Params->IoStatus.Information;
+
+    DbgPrint("[pico_driver] Inference Write complete: status 0x%x, bytes written %llu\n", status, (ULONGLONG)bytesWritten);
+
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[pico_driver] ERROR: Inference write failed, completing request with error\n");
+        WdfRequestComplete(Request, status);
+        //ExFreePool(infContext);
+        return;
+    }
+
+    // Now read the inference result from device
+    DbgPrint("[pico_driver] Inference write successful, now reading result from device...\n");
+
+    // Create a new request for reading the result
+    //WDFREQUEST readRequest = NULL;
+    //WDF_OBJECT_ATTRIBUTES requestAttributes;
+    //WDF_OBJECT_ATTRIBUTES_INIT(&requestAttributes);
+    //requestAttributes.ParentObject = infContext->DeviceContext->WritePipe;  // Auto-cleanup when device closes
+
+    //status = WdfRequestCreate(&requestAttributes, WdfUsbTargetPipeGetIoTarget(infContext->DeviceContext->ReadPipe), &readRequest);
+    //if (!NT_SUCCESS(status)) {
+    //    DbgPrint("[pico_driver] ERROR: Failed to create read request 0x%x\n", status);
+    //    WdfRequestComplete(infContext->OriginalRequest, status);
+    //    ExFreePool(infContext);
+    //    return;
+    //}
+
+  /*  WDF_REQUEST_REUSE_PARAMS reuseParams;
+    WDF_REQUEST_REUSE_PARAMS_INIT(&reuseParams, WDF_REQUEST_REUSE_SET_NEW_IRP, STATUS_SUCCESS);
+    WdfRequestReuse(Request, &reuseParams);*/
+
+    WDFQUEUE queue = WdfRequestGetIoQueue(Request);
+    WDFDEVICE device = WdfIoQueueGetDevice(queue);
+    PDEVICE_CONTEXT pDeviceContext = DeviceGetContext(device);
+    WDFUSBPIPE readPipe = pDeviceContext->ReadPipe;
+
+    // OutputBuffer 가져오기 
+    WDFMEMORY outputMemory = NULL;
+    status = WdfRequestRetrieveOutputMemory(Request, &outputMemory);
+
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[pico_driver] ERROR: WdfRequestRetrieveOutputMemory failed 0x%x\n", status);
+        WdfRequestComplete(Request, status);
+        return;
+    }
+
+    // Format the read request
+    status = WdfUsbTargetPipeFormatRequestForRead(
+        readPipe,
+        Request,
+        outputMemory,
+        NULL
+    );
+
+    // reference count decrease 
+    /*WdfObjectDereference(outputMemory);*/
+
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[pico_driver] ERROR: WdfUsbTargetPipeFormatRequestForRead failed 0x%x\n", status);
+        WdfRequestComplete(Request, status);
+        return;
+    }
+
+    // Set completion routine for read
+    WdfRequestSetCompletionRoutine(Request, PicoInferenceReadComplete, NULL);
+
+    WDF_REQUEST_SEND_OPTIONS sendOptions;
+    WDF_REQUEST_SEND_OPTIONS_INIT(&sendOptions, 0);
+    WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&sendOptions, WDF_REL_TIMEOUT_IN_MS(10000));
+
+    // Send read request asynchronously
+    if (!WdfRequestSend(Request, WdfUsbTargetPipeGetIoTarget(readPipe), &sendOptions)) {
+        status = WdfRequestGetStatus(Request);
+        DbgPrint("[pico_driver] ERROR: WdfRequestSend (read) failed 0x%x\n", status);
+        WdfRequestComplete(Request, status);
+        return;
+    }
+
+    DbgPrint("[pico_driver] Inference read request sent successfully\n");
 }
 
 NTSTATUS
@@ -462,6 +626,104 @@ Return Value:
 
             // Asynchronous - completion will be handled by PicoDmaWriteComplete callback
             DbgPrint("[pico_driver] Model load request sent successfully\n");
+            return;
+        }
+
+        case IOCTL_PICO_RUN_INFERENCE: {
+            DbgPrint("[pico_driver] IOCTL_PICO_RUN_INFERENCE received (input size: %d bytes, output size: %d bytes)\n",
+                (int)InputBufferLength, (int)OutputBufferLength);
+
+            if (pDeviceContext->WritePipe == NULL) {
+                DbgPrint("[pico_driver] ERROR: WritePipe is NULL - device not ready for writing\n");
+                status = STATUS_DEVICE_NOT_READY;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            if (pDeviceContext->ReadPipe == NULL) {
+                DbgPrint("[pico_driver] ERROR: ReadPipe is NULL - device not ready for reading\n");
+                status = STATUS_DEVICE_NOT_READY;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            if (OutputBufferLength == 0) {
+                DbgPrint("[pico_driver] ERROR: OutputBufferLength is 0 - no result buffer provided\n");
+                status = STATUS_BUFFER_TOO_SMALL;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Allocate context for this inference operation
+            PINFERENCE_CONTEXT infContext = (PINFERENCE_CONTEXT)ExAllocatePoolWithTag(NonPagedPool, sizeof(INFERENCE_CONTEXT), 'ifnc');
+            if (!infContext) {
+                DbgPrint("[pico_driver] ERROR: Failed to allocate inference context\n");
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Retrieve input memory (image data to send to device)
+            WDFMEMORY inputMemory = NULL;
+            status = WdfRequestRetrieveInputMemory(Request, &inputMemory);
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfRequestRetrieveInputMemory failed 0x%x\n", status);
+                //ExFreePool(infContext);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Retrieve output memory (where to store inference results)
+            WDFMEMORY outputMemory = NULL;
+            status = WdfRequestRetrieveOutputMemory(Request, &outputMemory);
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfRequestRetrieveOutputMemory failed 0x%x\n", status);
+                //ExFreePool(infContext);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            //// Store context information for completion callbacks
+            //infContext->OriginalRequest = Request;
+            //infContext->OutputMemory = outputMemory;
+            //infContext->DeviceContext = pDeviceContext;
+
+            DbgPrint("[pico_driver] Input memory retrieved for inference\n");
+
+            // Format the write request (send image + cmd to device)
+            status = WdfUsbTargetPipeFormatRequestForWrite(
+                pDeviceContext->WritePipe,
+                Request,
+                inputMemory,
+                NULL
+            );
+
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfUsbTargetPipeFormatRequestForWrite failed 0x%x\n", status);
+                //ExFreePool(infContext);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            DbgPrint("[pico_driver] Request formatted for inference write operation\n");
+
+            // Set completion routine to handle write completion and trigger read
+            WdfRequestSetCompletionRoutine(Request, PicoInferenceWriteComplete, NULL);
+
+            // Send the write request asynchronously
+            if (!WdfRequestSend(Request, WdfUsbTargetPipeGetIoTarget(pDeviceContext->WritePipe), WDF_NO_SEND_OPTIONS)) {
+                status = WdfRequestGetStatus(Request);
+                DbgPrint("[pico_driver] ERROR: WdfRequestSend (write) failed 0x%x\n", status);
+                //ExFreePool(infContext);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Asynchronous - completion will be handled by PicoInferenceWriteComplete callback
+            // which will then trigger PicoInferenceReadComplete
+            DbgPrint("[pico_driver] Inference write request sent successfully\n");
             return;
         }
 

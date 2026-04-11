@@ -8,6 +8,15 @@
 #include "pico_test_mfcDlg.h"
 #include "afxdialogex.h"
 #include "../include/util.hpp"
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+#include <atlstr.h>
+
+#ifdef _DEBUG
+#pragma comment(lib, "../lib/opencv/opencv_world4120d.lib")
+#else
+#pragma comment(lib, "../lib/opencv/opencv_world4120.lib")
+#endif
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -73,6 +82,7 @@ BEGIN_MESSAGE_MAP(CpicotestmfcDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BTN_DMA_LED_ON, &CpicotestmfcDlg::OnBnClickedBtnDmaLedOn)
 	ON_BN_CLICKED(IDC_BTN_DMA_LED_OFF, &CpicotestmfcDlg::OnBnClickedBtnDmaLedOff)
 	ON_BN_CLICKED(IDC_BTN_MODEL_LOAD, &CpicotestmfcDlg::OnBnClickedBtnModelLoad)
+	ON_BN_CLICKED(IDC_BTN_IMAGE_LOAD, &CpicotestmfcDlg::OnBnClickedBtnImageLoad)
 END_MESSAGE_MAP()
 
 
@@ -468,5 +478,297 @@ void CpicotestmfcDlg::OnBnClickedBtnModelLoad()
 		MessageBox(msg, _T("Error"));
 		delete[] pBuffer;
 		CloseHandle(overlapped.hEvent);
+	}
+}
+
+void CpicotestmfcDlg::OnBnClickedBtnImageLoad()
+{
+	// Image file dialog to select image file
+	CFileDialog fileDlg(TRUE, _T("jpg"), _T("*.jpg"), OFN_FILEMUSTEXIST,
+		_T("Image Files (*.jpg;*.png;*.bmp;*.tiff)|*.jpg;*.png;*.bmp;*.tiff|All Files (*.*)|*.*||"), this);
+
+	if (fileDlg.DoModal() != IDOK) {
+		return;  // User cancelled
+	}
+
+	// Convert CString to std::string for OpenCV
+	CString cstrPath = fileDlg.GetPathName();
+	const char* pszPath = CW2A(cstrPath);
+	std::string imagePath(pszPath);
+
+	// Load image using OpenCV
+	cv::Mat originalImg = cv::imread(imagePath);
+
+	if (originalImg.empty()) {
+		MessageBox(_T("Failed to load image."), _T("Error"));
+		return;
+	}
+
+	// Step 1: Display original image
+	DisplayImageOnControl(originalImg);
+	CString origMsg;
+	origMsg.Format(_T("Original image loaded!\n%d x %d x %d"),
+		originalImg.cols, originalImg.rows, originalImg.channels());
+	MessageBox(origMsg, _T("Original Image"));
+
+	// Step 2: Convert to grayscale
+	cv::Mat grayImg;
+	cv::cvtColor(originalImg, grayImg, cv::COLOR_BGR2GRAY);
+
+	// Step 3: Resize to 64x64
+	cv::Mat resizedImg;
+	cv::resize(grayImg, resizedImg, cv::Size(64, 64));
+
+	// Store preprocessed image
+	m_preprocessedImage = resizedImg.clone();
+
+	// Step 4: Display preprocessed image
+	//DisplayImageOnControl(resizedImg);
+
+	// 비동기로 DeviceIOControl 보내기
+	// IOCTL_PICO_RUN_INFERENCE IOCTL CODE
+	// Protocol (Write to device): [0x21][ImageData...]
+	// Protocol (Read from device): [결과 데이터...]
+	// cmd = 0x21
+
+	DWORD imageDataSize = resizedImg.rows * resizedImg.cols * resizedImg.channels();
+	DWORD totalSize = 1 + imageDataSize;  // 1 byte for cmd + image data
+	PUCHAR pInBuffer = new UCHAR[totalSize];
+
+	if (!pInBuffer) {
+		MessageBox(_T("Memory allocation failed."), _T("Error"));
+		return;
+	}
+
+	// Allocate output buffer for inference results
+	DWORD resultBufferSize = 64;  // Adjust based on your inference result size
+	PUCHAR pOutBuffer = new UCHAR[resultBufferSize];
+
+	if (!pOutBuffer) {
+		MessageBox(_T("Memory allocation failed."), _T("Error"));
+		delete[] pInBuffer;
+		return;
+	}
+
+	// Build input protocol packet
+	pInBuffer[0] = 0x21;  // Command byte for inference
+	memcpy(&pInBuffer[1], resizedImg.data, imageDataSize);
+
+	// Create OVERLAPPED structure for asynchronous I/O
+	OVERLAPPED overlapped = {};
+	overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+	if (!overlapped.hEvent) {
+		MessageBox(_T("Failed to create event."), _T("Error"));
+		delete[] pInBuffer;
+		delete[] pOutBuffer;
+		return;
+	}
+
+	DWORD bytesReturned = 0;
+
+	// Send image data and receive inference result via IOCTL (two-phase: write + read)
+	if (DeviceIoControl(m_hDevice, IOCTL_PICO_RUN_INFERENCE,
+		pInBuffer, totalSize,           // Input: image + cmd
+		pOutBuffer, resultBufferSize,   // Output: inference results
+		&bytesReturned, &overlapped)) {
+		// Request completed synchronously
+		CString msg;
+		msg.Format(_T("Inference - Success (sync)!\nInput: %lu bytes\nResult: %lu bytes"), imageDataSize, bytesReturned);
+		MessageBox(msg, _T("Success"));
+
+		// Parse bounding boxes and apply blur
+		if (pOutBuffer[0] == 0x22 && bytesReturned > 2) {  // Response code verification
+			uint8_t boxCount = pOutBuffer[1];
+			uint16_t idx = 2;
+
+			// Clone original image for blur processing
+			cv::Mat displayImg = originalImg.clone();
+
+			// Process each bounding box
+			for (uint8_t i = 0; i < boxCount && idx + 4 < resultBufferSize; i++) {
+				uint8_t x = pOutBuffer[idx++];           // 0-255 normalized
+				uint8_t y = pOutBuffer[idx++];
+				uint8_t w = pOutBuffer[idx++];
+				uint8_t h = pOutBuffer[idx++];
+				uint8_t confidence = pOutBuffer[idx++];
+
+				// Convert normalized coordinates (0-255) to original image size
+				float norm_x = (float)x / 255.0f;
+				float norm_y = (float)y / 255.0f;
+				float norm_w = (float)w / 255.0f;
+				float norm_h = (float)h / 255.0f;
+
+				int orig_x = (int)(norm_x * originalImg.cols);
+				int orig_y = (int)(norm_y * originalImg.rows);
+				int orig_w = (int)(norm_w * originalImg.cols);
+				int orig_h = (int)(norm_h * originalImg.rows);
+
+				// Boundary check
+				int x1 = std::max(0, orig_x);
+				int y1 = std::max(0, orig_y);
+				int x2 = std::min(originalImg.cols - 1, orig_x + orig_w);
+				int y2 = std::min(originalImg.rows - 1, orig_y + orig_h);
+
+				// Apply blur to detected region
+				if (x2 > x1 && y2 > y1) {
+					cv::Rect roi(x1, y1, x2 - x1, y2 - y1);
+					cv::Mat roiImg = displayImg(roi);
+					cv::blur(roiImg, roiImg, cv::Size(25, 25));  // Blur kernel size: 25x25
+
+					// Draw bounding box for visualization
+					cv::rectangle(displayImg, roi, cv::Scalar(0, 255, 0), 2);
+				}
+			}
+
+			// Display blurred image
+			DisplayImageOnControl(displayImg);
+
+			CString resultMsg;
+			resultMsg.Format(_T("Successfully blurred %d face(s)"), boxCount);
+			MessageBox(resultMsg, _T("Blur Complete"));
+		} else {
+			MessageBox(_T("Invalid response format"), _T("Error"));
+		}
+
+		delete[] pInBuffer;
+		delete[] pOutBuffer;
+		CloseHandle(overlapped.hEvent);
+	}
+	else if (GetLastError() == ERROR_IO_PENDING) {
+		// Request is pending - wait for completion
+		DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 30000);  // 30 second timeout
+
+		if (waitResult == WAIT_OBJECT_0) {
+			// Operation completed
+			CString msg;
+			msg.Format(_T("Inference - Success (async)!\nInput: %lu bytes\nResult: %lu bytes"), imageDataSize, bytesReturned);
+			MessageBox(msg, _T("Success"));
+
+			// Parse bounding boxes and apply blur
+			if (pOutBuffer[0] == 0x22 && bytesReturned > 2) {  // Response code verification
+				uint8_t boxCount = pOutBuffer[1];
+				uint16_t idx = 2;
+
+				// Clone original image for blur processing
+				cv::Mat displayImg = originalImg.clone();
+
+				// Process each bounding box
+				for (uint8_t i = 0; i < boxCount && idx + 4 < resultBufferSize; i++) {
+					uint8_t x = pOutBuffer[idx++];           // 0-255 normalized
+					uint8_t y = pOutBuffer[idx++];
+					uint8_t w = pOutBuffer[idx++];
+					uint8_t h = pOutBuffer[idx++];
+					uint8_t confidence = pOutBuffer[idx++];
+
+					// Convert normalized coordinates (0-255) to original image size
+					float norm_x = (float)x / 255.0f;
+					float norm_y = (float)y / 255.0f;
+					float norm_w = (float)w / 255.0f;
+					float norm_h = (float)h / 255.0f;
+
+					int orig_x = (int)(norm_x * originalImg.cols);
+					int orig_y = (int)(norm_y * originalImg.rows);
+					int orig_w = (int)(norm_w * originalImg.cols);
+					int orig_h = (int)(norm_h * originalImg.rows);
+
+					// Boundary check
+					int x1 = std::max(0, orig_x);
+					int y1 = std::max(0, orig_y);
+					int x2 = std::min(originalImg.cols - 1, orig_x + orig_w);
+					int y2 = std::min(originalImg.rows - 1, orig_y + orig_h);
+
+					// Apply blur to detected region
+					if (x2 > x1 && y2 > y1) {
+						cv::Rect roi(x1, y1, x2 - x1, y2 - y1);
+						cv::Mat roiImg = displayImg(roi);
+						cv::blur(roiImg, roiImg, cv::Size(25, 25));  // Blur kernel size: 25x25
+
+						// Draw bounding box for visualization
+						cv::rectangle(displayImg, roi, cv::Scalar(0, 255, 0), 2);
+					}
+				}
+
+				// Display blurred image
+				DisplayImageOnControl(displayImg);
+
+				CString resultMsg;
+				resultMsg.Format(_T("Successfully blurred %d face(s)"), boxCount);
+				MessageBox(resultMsg, _T("Blur Complete"));
+			} else {
+				MessageBox(_T("Invalid response format"), _T("Error"));
+			}
+		}
+		else if (waitResult == WAIT_TIMEOUT) {
+			MessageBox(_T("Inference - Timeout!"), _T("Error"));
+		}
+		else {
+			MessageBox(_T("Inference - Wait failed!"), _T("Error"));
+		}
+
+		delete[] pInBuffer;
+		delete[] pOutBuffer;
+		CloseHandle(overlapped.hEvent);
+	}
+	else {
+		DWORD error = GetLastError();
+		CString msg;
+		msg.Format(_T("Inference - Failed: 0x%08X"), error);
+		MessageBox(msg, _T("Error"));
+		delete[] pInBuffer;
+		delete[] pOutBuffer;
+		CloseHandle(overlapped.hEvent);
+	}
+}
+
+void CpicotestmfcDlg::DisplayImageOnControl(const cv::Mat& img)
+{
+	cv::Mat displayImg;
+
+	// If grayscale, convert to BGR for display
+	if (img.channels() == 1) {
+		cv::cvtColor(img, displayImg, cv::COLOR_GRAY2BGR);
+	} else {
+		displayImg = img.clone();
+	}
+
+	// Resize for better visibility (scale to 256x256)
+	cv::Mat displayImgLarge;
+	cv::resize(displayImg, displayImgLarge, cv::Size(256, 256), 0, 0, cv::INTER_LINEAR);
+
+	// Create HBITMAP
+	int rows = displayImgLarge.rows;
+	int cols = displayImgLarge.cols;
+
+	BITMAPINFO bmpInfo;
+	ZeroMemory(&bmpInfo, sizeof(BITMAPINFO));
+	bmpInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bmpInfo.bmiHeader.biWidth = cols;
+	bmpInfo.bmiHeader.biHeight = -rows;
+	bmpInfo.bmiHeader.biPlanes = 1;
+	bmpInfo.bmiHeader.biBitCount = 24;
+	bmpInfo.bmiHeader.biCompression = BI_RGB;
+
+	void* pBits = nullptr;
+	HDC hdc = GetDC()->GetSafeHdc();
+	HBITMAP hBitmap = CreateDIBSection(hdc, &bmpInfo, DIB_RGB_COLORS, &pBits, nullptr, 0);
+
+	if (!hBitmap) {
+		return;
+	}
+
+	if (displayImgLarge.isContinuous()) {
+		memcpy(pBits, displayImgLarge.data, rows * cols * 3);
+	} else {
+		DeleteObject(hBitmap);
+		return;
+	}
+
+	// Display on Picture Control
+	CStatic* pPicCtrl = (CStatic*)GetDlgItem(IDC_PIC_IMG);
+	if (pPicCtrl) {
+		pPicCtrl->SetBitmap(hBitmap);
+	} else {
+		DeleteObject(hBitmap);
 	}
 }
