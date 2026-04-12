@@ -28,7 +28,7 @@ pico_driver.sys  = 1,,
 %ManufacturerName%=Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
 
 [Standard.NT$ARCH$.10.0...16299]
-%pico_driver.DeviceDesc%=pico_driver_Device, USB\VID_CAFE&PID_4005
+%pico_driver.DeviceDesc%=pico_driver_Device, USB\VID_CAFE&PID_4006&MI_02
 
 [pico_driver_Device.NT]
 CopyFiles=File_Copy

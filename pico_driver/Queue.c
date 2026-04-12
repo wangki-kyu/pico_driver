@@ -197,7 +197,7 @@ PicoInferenceWriteComplete(
 
     WDF_REQUEST_SEND_OPTIONS sendOptions;
     WDF_REQUEST_SEND_OPTIONS_INIT(&sendOptions, 0);
-    WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&sendOptions, WDF_REL_TIMEOUT_IN_MS(10000));
+    WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&sendOptions, WDF_REL_TIMEOUT_IN_MS(30000));
 
     // Send read request asynchronously
     if (!WdfRequestSend(Request, WdfUsbTargetPipeGetIoTarget(readPipe), &sendOptions)) {

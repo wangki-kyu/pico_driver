@@ -50,4 +50,7 @@ private:
 	void ParseAndApplyBlur(const cv::Mat& originalImg, PUCHAR pOutBuffer,
 		DWORD bytesReturned, DWORD resultBufferSize);
 	void HandleImageInference();
+	cv::Mat LoadImageFromFile(const char* imagePath);
+	std::vector<int8_t> PreprocessImageToInt8(const cv::Mat& rgbImage);
+	cv::Mat BlurImageByHeatmap(const cv::Mat& original_image, const std::vector<float>& output_probs, float threshold);
 };

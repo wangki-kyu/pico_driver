@@ -484,12 +484,152 @@ void CpicotestmfcDlg::OnBnClickedBtnModelLoad()
 
 void CpicotestmfcDlg::OnBnClickedBtnImageLoad()
 {
-	// 1. LoadImageFromFile로 이미지 로드 파일 오픈 다이얼로그로 가져오도록 해주셈 
-	// 2. PreprocessImageToInt8 로 전처리하도록 함 
-	// 3. DeviceIoControl로 비동기방식으로 IOCTL_PICO_RUN_INFERENCE 보냄 
-	// 4. OutputBuffer는 size 64로 받을 거임 
-	// 5. BlurImageByHeatmap을 사용해서 원본을 blur 처리해줬으면 함. 
+	// Check device connection
+	if (m_hDevice == INVALID_HANDLE_VALUE) {
+		MessageBox(_T("Device not connected."), _T("Error"));
+		return;
+	}
 
+	// Step 1: File dialog to select image file
+	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_FILEMUSTEXIST,
+		_T("Image Files (*.jpg;*.png;*.bmp)|*.jpg;*.png;*.bmp|All Files (*.*)|*.*||"), this);
+
+	if (fileDlg.DoModal() != IDOK) {
+		return;  // User cancelled
+	}
+
+	// Convert CString to const char* for LoadImageFromFile
+	CString cstrPath = fileDlg.GetPathName();
+	const char* pszPath = CW2A(cstrPath);
+
+	// Step 1: Load image using LoadImageFromFile
+	cv::Mat originalImg = LoadImageFromFile(pszPath);
+
+	if (originalImg.empty()) {
+		MessageBox(_T("Failed to load image."), _T("Error"));
+		return;
+	}
+
+	// 원본 이미지 show! 
+	DisplayImageOnControl(originalImg);
+
+	// Display original image info
+	CString origMsg;
+	origMsg.Format(_T("Original image loaded!\n%d x %d x %d"),
+		originalImg.cols, originalImg.rows, originalImg.channels());
+	MessageBox(origMsg, _T("Original Image"));
+
+	// Step 2: Preprocess image to INT8 (64x64)
+	std::vector<int8_t> int8Data = PreprocessImageToInt8(originalImg);
+
+	if (int8Data.empty()) {
+		MessageBox(_T("Failed to preprocess image."), _T("Error"));
+		return;
+	}
+
+	// Build input protocol packet [0x21][ImageData...]
+	DWORD imageDataSize = 64 * 64;  // Preprocessed image is 64x64
+	DWORD totalSize = 1 + imageDataSize;  // 1 byte for cmd + image data
+	PUCHAR pInBuffer = new UCHAR[totalSize];
+
+	if (!pInBuffer) {
+		MessageBox(_T("Memory allocation failed."), _T("Error"));
+		return;
+	}
+
+	// Build input protocol packet
+	pInBuffer[0] = 0x21;  // Command byte for inference
+	memcpy(&pInBuffer[1], int8Data.data(), imageDataSize);
+
+	// Step 4: Allocate output buffer for inference results (64 bytes for 8x8 heatmap)
+	DWORD resultBufferSize = 64;
+	PUCHAR pOutBuffer = new UCHAR[resultBufferSize];
+
+	if (!pOutBuffer) {
+		MessageBox(_T("Memory allocation failed."), _T("Error"));
+		delete[] pInBuffer;
+		return;
+	}
+
+	// Create OVERLAPPED structure for asynchronous I/O
+	OVERLAPPED overlapped = {};
+	overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+	if (!overlapped.hEvent) {
+		MessageBox(_T("Failed to create event."), _T("Error"));
+		delete[] pInBuffer;
+		delete[] pOutBuffer;
+		return;
+	}
+
+	DWORD bytesReturned = 0;
+
+	// Step 3: Send image data via IOCTL (asynchronous)
+	if (DeviceIoControl(m_hDevice, IOCTL_PICO_RUN_INFERENCE,
+		pInBuffer, totalSize,           // Input: image + cmd
+		pOutBuffer, resultBufferSize,   // Output: inference results (8x8 heatmap)
+		&bytesReturned, &overlapped)) {
+		// Request completed synchronously
+		CString msg;
+		msg.Format(_T("Inference - Success (sync)!\nResult: %lu bytes"), bytesReturned);
+		MessageBox(msg, _T("Success"));
+
+		// Step 5: Convert output buffer to float heatmap and apply blur
+		std::vector<float> heatmap(64);
+		for (int i = 0; i < 64; i++) {
+			heatmap[i] = (float)pOutBuffer[i] / 255.0f;  // Normalize to 0.0-1.0
+		}
+
+		// Apply blur based on heatmap
+		cv::Mat blurredImg = BlurImageByHeatmap(originalImg, heatmap, 0.5f);
+		DisplayImageOnControl(blurredImg);
+
+		delete[] pInBuffer;
+		delete[] pOutBuffer;
+		CloseHandle(overlapped.hEvent);
+	}
+	else if (GetLastError() == ERROR_IO_PENDING) {
+		// Request is pending - wait for completion
+		DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 30000);  // 30 second timeout
+
+		if (waitResult == WAIT_OBJECT_0) {
+			// Operation completed - get actual bytes returned
+			GetOverlappedResult(m_hDevice, &overlapped, &bytesReturned, FALSE);
+
+			CString msg;
+			msg.Format(_T("Inference - Success (async)!\nResult: %lu bytes"), bytesReturned);
+			MessageBox(msg, _T("Success"));
+
+			// Step 5: Convert output buffer to float heatmap and apply blur
+			std::vector<float> heatmap(64);
+			for (int i = 0; i < 64; i++) {
+				heatmap[i] = (float)pOutBuffer[i] / 255.0f;  // Normalize to 0.0-1.0
+			}
+
+			// Apply blur based on heatmap
+			cv::Mat blurredImg = BlurImageByHeatmap(originalImg, heatmap, 0.5f);
+			DisplayImageOnControl(blurredImg);
+		}
+		else if (waitResult == WAIT_TIMEOUT) {
+			MessageBox(_T("Inference - Timeout!"), _T("Error"));
+		}
+		else {
+			MessageBox(_T("Inference - Wait failed!"), _T("Error"));
+		}
+
+		delete[] pInBuffer;
+		delete[] pOutBuffer;
+		CloseHandle(overlapped.hEvent);
+	}
+	else {
+		DWORD error = GetLastError();
+		CString msg;
+		msg.Format(_T("Inference - Failed: 0x%08X"), error);
+		MessageBox(msg, _T("Error"));
+		delete[] pInBuffer;
+		delete[] pOutBuffer;
+		CloseHandle(overlapped.hEvent);
+	}
 }
 
 
@@ -753,7 +893,7 @@ void CpicotestmfcDlg::HandleImageInference()
 }
 
 // OpenCV로 이미지를 읽어오는 함수
-cv::Mat LoadImageFromFile(const char* imagePath)
+cv::Mat CpicotestmfcDlg::LoadImageFromFile(const char* imagePath)
 {
 	cv::Mat image = cv::imread(imagePath, cv::IMREAD_COLOR);
 
@@ -769,7 +909,7 @@ cv::Mat LoadImageFromFile(const char* imagePath)
 // 이미지 전처리 함수
 // 입력: RGB 컬러 이미지 (cv::Mat)
 // 출력: [1, 64, 64, 1] INT8 배열
-std::vector<int8_t> PreprocessImageToInt8(const cv::Mat& rgbImage)
+std::vector<int8_t> CpicotestmfcDlg::PreprocessImageToInt8(const cv::Mat& rgbImage)
 {
 	if (rgbImage.empty()) {
 		fprintf(stderr, "Error: Empty image\n");
@@ -807,7 +947,7 @@ std::vector<int8_t> PreprocessImageToInt8(const cv::Mat& rgbImage)
 // 추론 결과 기반 선택적 Blur 처리 함수
 // 입력: 원본 이미지, runInference의 output (8x8 확률값), threshold
 // 출력: blur 처리된 이미지
-cv::Mat BlurImageByHeatmap(const cv::Mat& original_image, const std::vector<float>& output_probs, float threshold)
+cv::Mat CpicotestmfcDlg::BlurImageByHeatmap(const cv::Mat& original_image, const std::vector<float>& output_probs, float threshold)
 {
 	if (original_image.empty()) {
 		fprintf(stderr, "Error: Empty original image\n");
