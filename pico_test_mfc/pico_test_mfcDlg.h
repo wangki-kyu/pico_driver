@@ -47,4 +47,7 @@ public:
 
 private:
 	void DisplayImageOnControl(const cv::Mat& img);
+	void ParseAndApplyBlur(const cv::Mat& originalImg, PUCHAR pOutBuffer,
+		DWORD bytesReturned, DWORD resultBufferSize);
+	void HandleImageInference();
 };

@@ -11,6 +11,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <atlstr.h>
+#include <vector>
 
 #ifdef _DEBUG
 #pragma comment(lib, "../lib/opencv/opencv_world4120d.lib")
@@ -379,8 +380,8 @@ void CpicotestmfcDlg::OnBnClickedBtnModelLoad()
 	}
 
 	// File dialog to select model file
-	CFileDialog fileDlg(TRUE, _T("bin"), _T("*.bin"), OFN_FILEMUSTEXIST,
-		_T("Binary Files (*.bin)|*.bin|All Files (*.*)|*.*||"), this);
+	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_FILEMUSTEXIST,
+		_T("All Files (*.*)|*.*||"), this);
 
 	if (fileDlg.DoModal() != IDOK) {
 		return;  // User cancelled
@@ -483,9 +484,134 @@ void CpicotestmfcDlg::OnBnClickedBtnModelLoad()
 
 void CpicotestmfcDlg::OnBnClickedBtnImageLoad()
 {
+	// 1. LoadImageFromFile로 이미지 로드 파일 오픈 다이얼로그로 가져오도록 해주셈 
+	// 2. PreprocessImageToInt8 로 전처리하도록 함 
+	// 3. DeviceIoControl로 비동기방식으로 IOCTL_PICO_RUN_INFERENCE 보냄 
+	// 4. OutputBuffer는 size 64로 받을 거임 
+	// 5. BlurImageByHeatmap을 사용해서 원본을 blur 처리해줬으면 함. 
+
+}
+
+
+
+void CpicotestmfcDlg::DisplayImageOnControl(const cv::Mat& img)
+{
+	cv::Mat displayImg;
+
+	// If grayscale, convert to BGR for display
+	if (img.channels() == 1) {
+		cv::cvtColor(img, displayImg, cv::COLOR_GRAY2BGR);
+	} else {
+		displayImg = img.clone();
+	}
+
+	// Resize for better visibility (scale to 256x256)
+	cv::Mat displayImgLarge;
+	cv::resize(displayImg, displayImgLarge, cv::Size(256, 256), 0, 0, cv::INTER_LINEAR);
+
+	// Create HBITMAP
+	int rows = displayImgLarge.rows;
+	int cols = displayImgLarge.cols;
+
+	BITMAPINFO bmpInfo;
+	ZeroMemory(&bmpInfo, sizeof(BITMAPINFO));
+	bmpInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bmpInfo.bmiHeader.biWidth = cols;
+	bmpInfo.bmiHeader.biHeight = -rows;
+	bmpInfo.bmiHeader.biPlanes = 1;
+	bmpInfo.bmiHeader.biBitCount = 24;
+	bmpInfo.bmiHeader.biCompression = BI_RGB;
+
+	void* pBits = nullptr;
+	HDC hdc = GetDC()->GetSafeHdc();
+	HBITMAP hBitmap = CreateDIBSection(hdc, &bmpInfo, DIB_RGB_COLORS, &pBits, nullptr, 0);
+
+	if (!hBitmap) {
+		return;
+	}
+
+	if (displayImgLarge.isContinuous()) {
+		memcpy(pBits, displayImgLarge.data, rows * cols * 3);
+	} else {
+		DeleteObject(hBitmap);
+		return;
+	}
+
+	// Display on Picture Control and clean up old bitmap
+	CStatic* pPicCtrl = (CStatic*)GetDlgItem(IDC_PIC_IMG);
+	if (pPicCtrl) {
+		HBITMAP hOldBitmap = pPicCtrl->SetBitmap(hBitmap);
+		if (hOldBitmap) {
+			DeleteObject(hOldBitmap);  // Fix: cleanup old HBITMAP
+		}
+	} else {
+		DeleteObject(hBitmap);
+	}
+}
+
+void CpicotestmfcDlg::ParseAndApplyBlur(const cv::Mat& originalImg, PUCHAR pOutBuffer,
+	DWORD bytesReturned, DWORD resultBufferSize)
+{
+	// Parse bounding boxes and apply blur
+	if (pOutBuffer[0] == 0x22 && bytesReturned > 2) {  // Response code verification
+		uint8_t boxCount = pOutBuffer[1];
+		uint16_t idx = 2;
+
+		// Clone original image for blur processing
+		cv::Mat displayImg = originalImg.clone();
+
+		// Process each bounding box
+		for (uint8_t i = 0; i < boxCount && idx + 5 <= bytesReturned; i++) {
+			uint8_t x = pOutBuffer[idx++];           // 0-255 normalized
+			uint8_t y = pOutBuffer[idx++];
+			uint8_t w = pOutBuffer[idx++];
+			uint8_t h = pOutBuffer[idx++];
+			uint8_t confidence = pOutBuffer[idx++];
+
+			// Convert normalized coordinates (0-255) to original image size
+			float norm_x = (float)x / 255.0f;
+			float norm_y = (float)y / 255.0f;
+			float norm_w = (float)w / 255.0f;
+			float norm_h = (float)h / 255.0f;
+
+			int orig_x = (int)(norm_x * originalImg.cols);
+			int orig_y = (int)(norm_y * originalImg.rows);
+			int orig_w = (int)(norm_w * originalImg.cols);
+			int orig_h = (int)(norm_h * originalImg.rows);
+
+			// Boundary check
+			int x1 = std::max(0, orig_x);
+			int y1 = std::max(0, orig_y);
+			int x2 = std::min(originalImg.cols - 1, orig_x + orig_w);
+			int y2 = std::min(originalImg.rows - 1, orig_y + orig_h);
+
+			// Apply blur to detected region
+			if (x2 > x1 && y2 > y1) {
+				cv::Rect roi(x1, y1, x2 - x1, y2 - y1);
+				cv::Mat roiImg = displayImg(roi);
+				cv::blur(roiImg, roiImg, cv::Size(25, 25));  // Blur kernel size: 25x25
+
+				// Draw bounding box for visualization
+				cv::rectangle(displayImg, roi, cv::Scalar(0, 255, 0), 2);
+			}
+		}
+
+		// Display blurred image
+		DisplayImageOnControl(displayImg);
+
+		CString resultMsg;
+		resultMsg.Format(_T("Successfully blurred %d face(s)"), boxCount);
+		MessageBox(resultMsg, _T("Blur Complete"));
+	} else {
+		MessageBox(_T("Invalid response format"), _T("Error"));
+	}
+}
+
+void CpicotestmfcDlg::HandleImageInference()
+{
 	// Image file dialog to select image file
-	CFileDialog fileDlg(TRUE, _T("jpg"), _T("*.jpg"), OFN_FILEMUSTEXIST,
-		_T("Image Files (*.jpg;*.png;*.bmp;*.tiff)|*.jpg;*.png;*.bmp;*.tiff|All Files (*.*)|*.*||"), this);
+	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_FILEMUSTEXIST,
+		_T("All Files (*.*)|*.*||"), this);
 
 	if (fileDlg.DoModal() != IDOK) {
 		return;  // User cancelled
@@ -541,7 +667,7 @@ void CpicotestmfcDlg::OnBnClickedBtnImageLoad()
 	}
 
 	// Allocate output buffer for inference results
-	DWORD resultBufferSize = 64;  // Adjust based on your inference result size
+	DWORD resultBufferSize = 64;
 	PUCHAR pOutBuffer = new UCHAR[resultBufferSize];
 
 	if (!pOutBuffer) {
@@ -552,7 +678,14 @@ void CpicotestmfcDlg::OnBnClickedBtnImageLoad()
 
 	// Build input protocol packet
 	pInBuffer[0] = 0x21;  // Command byte for inference
-	memcpy(&pInBuffer[1], resizedImg.data, imageDataSize);
+
+	// INT8 변환: uint8[0,255] → int8[-128,127]
+	// MODEL_SPECIFICATION.md 기준: int8 = (int16_t)uint8 - 128
+	std::vector<int8_t> int8Data(imageDataSize);
+	for (DWORD i = 0; i < imageDataSize; i++) {
+		int8Data[i] = (int8_t)((int16_t)resizedImg.data[i] - 128);
+	}
+	memcpy(&pInBuffer[1], int8Data.data(), imageDataSize);
 
 	// Create OVERLAPPED structure for asynchronous I/O
 	OVERLAPPED overlapped = {};
@@ -577,59 +710,7 @@ void CpicotestmfcDlg::OnBnClickedBtnImageLoad()
 		msg.Format(_T("Inference - Success (sync)!\nInput: %lu bytes\nResult: %lu bytes"), imageDataSize, bytesReturned);
 		MessageBox(msg, _T("Success"));
 
-		// Parse bounding boxes and apply blur
-		if (pOutBuffer[0] == 0x22 && bytesReturned > 2) {  // Response code verification
-			uint8_t boxCount = pOutBuffer[1];
-			uint16_t idx = 2;
-
-			// Clone original image for blur processing
-			cv::Mat displayImg = originalImg.clone();
-
-			// Process each bounding box
-			for (uint8_t i = 0; i < boxCount && idx + 4 < resultBufferSize; i++) {
-				uint8_t x = pOutBuffer[idx++];           // 0-255 normalized
-				uint8_t y = pOutBuffer[idx++];
-				uint8_t w = pOutBuffer[idx++];
-				uint8_t h = pOutBuffer[idx++];
-				uint8_t confidence = pOutBuffer[idx++];
-
-				// Convert normalized coordinates (0-255) to original image size
-				float norm_x = (float)x / 255.0f;
-				float norm_y = (float)y / 255.0f;
-				float norm_w = (float)w / 255.0f;
-				float norm_h = (float)h / 255.0f;
-
-				int orig_x = (int)(norm_x * originalImg.cols);
-				int orig_y = (int)(norm_y * originalImg.rows);
-				int orig_w = (int)(norm_w * originalImg.cols);
-				int orig_h = (int)(norm_h * originalImg.rows);
-
-				// Boundary check
-				int x1 = std::max(0, orig_x);
-				int y1 = std::max(0, orig_y);
-				int x2 = std::min(originalImg.cols - 1, orig_x + orig_w);
-				int y2 = std::min(originalImg.rows - 1, orig_y + orig_h);
-
-				// Apply blur to detected region
-				if (x2 > x1 && y2 > y1) {
-					cv::Rect roi(x1, y1, x2 - x1, y2 - y1);
-					cv::Mat roiImg = displayImg(roi);
-					cv::blur(roiImg, roiImg, cv::Size(25, 25));  // Blur kernel size: 25x25
-
-					// Draw bounding box for visualization
-					cv::rectangle(displayImg, roi, cv::Scalar(0, 255, 0), 2);
-				}
-			}
-
-			// Display blurred image
-			DisplayImageOnControl(displayImg);
-
-			CString resultMsg;
-			resultMsg.Format(_T("Successfully blurred %d face(s)"), boxCount);
-			MessageBox(resultMsg, _T("Blur Complete"));
-		} else {
-			MessageBox(_T("Invalid response format"), _T("Error"));
-		}
+		ParseAndApplyBlur(originalImg, pOutBuffer, bytesReturned, resultBufferSize);
 
 		delete[] pInBuffer;
 		delete[] pOutBuffer;
@@ -640,64 +721,14 @@ void CpicotestmfcDlg::OnBnClickedBtnImageLoad()
 		DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 30000);  // 30 second timeout
 
 		if (waitResult == WAIT_OBJECT_0) {
-			// Operation completed
+			// Operation completed - get actual bytes returned
+			GetOverlappedResult(m_hDevice, &overlapped, &bytesReturned, FALSE);
+
 			CString msg;
 			msg.Format(_T("Inference - Success (async)!\nInput: %lu bytes\nResult: %lu bytes"), imageDataSize, bytesReturned);
 			MessageBox(msg, _T("Success"));
 
-			// Parse bounding boxes and apply blur
-			if (pOutBuffer[0] == 0x22 && bytesReturned > 2) {  // Response code verification
-				uint8_t boxCount = pOutBuffer[1];
-				uint16_t idx = 2;
-
-				// Clone original image for blur processing
-				cv::Mat displayImg = originalImg.clone();
-
-				// Process each bounding box
-				for (uint8_t i = 0; i < boxCount && idx + 4 < resultBufferSize; i++) {
-					uint8_t x = pOutBuffer[idx++];           // 0-255 normalized
-					uint8_t y = pOutBuffer[idx++];
-					uint8_t w = pOutBuffer[idx++];
-					uint8_t h = pOutBuffer[idx++];
-					uint8_t confidence = pOutBuffer[idx++];
-
-					// Convert normalized coordinates (0-255) to original image size
-					float norm_x = (float)x / 255.0f;
-					float norm_y = (float)y / 255.0f;
-					float norm_w = (float)w / 255.0f;
-					float norm_h = (float)h / 255.0f;
-
-					int orig_x = (int)(norm_x * originalImg.cols);
-					int orig_y = (int)(norm_y * originalImg.rows);
-					int orig_w = (int)(norm_w * originalImg.cols);
-					int orig_h = (int)(norm_h * originalImg.rows);
-
-					// Boundary check
-					int x1 = std::max(0, orig_x);
-					int y1 = std::max(0, orig_y);
-					int x2 = std::min(originalImg.cols - 1, orig_x + orig_w);
-					int y2 = std::min(originalImg.rows - 1, orig_y + orig_h);
-
-					// Apply blur to detected region
-					if (x2 > x1 && y2 > y1) {
-						cv::Rect roi(x1, y1, x2 - x1, y2 - y1);
-						cv::Mat roiImg = displayImg(roi);
-						cv::blur(roiImg, roiImg, cv::Size(25, 25));  // Blur kernel size: 25x25
-
-						// Draw bounding box for visualization
-						cv::rectangle(displayImg, roi, cv::Scalar(0, 255, 0), 2);
-					}
-				}
-
-				// Display blurred image
-				DisplayImageOnControl(displayImg);
-
-				CString resultMsg;
-				resultMsg.Format(_T("Successfully blurred %d face(s)"), boxCount);
-				MessageBox(resultMsg, _T("Blur Complete"));
-			} else {
-				MessageBox(_T("Invalid response format"), _T("Error"));
-			}
+			ParseAndApplyBlur(originalImg, pOutBuffer, bytesReturned, resultBufferSize);
 		}
 		else if (waitResult == WAIT_TIMEOUT) {
 			MessageBox(_T("Inference - Timeout!"), _T("Error"));
@@ -721,54 +752,114 @@ void CpicotestmfcDlg::OnBnClickedBtnImageLoad()
 	}
 }
 
-void CpicotestmfcDlg::DisplayImageOnControl(const cv::Mat& img)
+// OpenCV로 이미지를 읽어오는 함수
+cv::Mat LoadImageFromFile(const char* imagePath)
 {
-	cv::Mat displayImg;
+	cv::Mat image = cv::imread(imagePath, cv::IMREAD_COLOR);
 
-	// If grayscale, convert to BGR for display
-	if (img.channels() == 1) {
-		cv::cvtColor(img, displayImg, cv::COLOR_GRAY2BGR);
-	} else {
-		displayImg = img.clone();
+	if (image.empty()) {
+		fprintf(stderr, "Error: Cannot open image file: %s\n", imagePath);
+		return cv::Mat();
 	}
 
-	// Resize for better visibility (scale to 256x256)
-	cv::Mat displayImgLarge;
-	cv::resize(displayImg, displayImgLarge, cv::Size(256, 256), 0, 0, cv::INTER_LINEAR);
+	printf("Image loaded: %d x %d\n", image.cols, image.rows);
+	return image;
+}
 
-	// Create HBITMAP
-	int rows = displayImgLarge.rows;
-	int cols = displayImgLarge.cols;
-
-	BITMAPINFO bmpInfo;
-	ZeroMemory(&bmpInfo, sizeof(BITMAPINFO));
-	bmpInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-	bmpInfo.bmiHeader.biWidth = cols;
-	bmpInfo.bmiHeader.biHeight = -rows;
-	bmpInfo.bmiHeader.biPlanes = 1;
-	bmpInfo.bmiHeader.biBitCount = 24;
-	bmpInfo.bmiHeader.biCompression = BI_RGB;
-
-	void* pBits = nullptr;
-	HDC hdc = GetDC()->GetSafeHdc();
-	HBITMAP hBitmap = CreateDIBSection(hdc, &bmpInfo, DIB_RGB_COLORS, &pBits, nullptr, 0);
-
-	if (!hBitmap) {
-		return;
+// 이미지 전처리 함수
+// 입력: RGB 컬러 이미지 (cv::Mat)
+// 출력: [1, 64, 64, 1] INT8 배열
+std::vector<int8_t> PreprocessImageToInt8(const cv::Mat& rgbImage)
+{
+	if (rgbImage.empty()) {
+		fprintf(stderr, "Error: Empty image\n");
+		return std::vector<int8_t>();
 	}
 
-	if (displayImgLarge.isContinuous()) {
-		memcpy(pBits, displayImgLarge.data, rows * cols * 3);
-	} else {
-		DeleteObject(hBitmap);
-		return;
+	// 1단계: 64×64로 리사이징
+	cv::Mat resized;
+	cv::resize(rgbImage, resized, cv::Size(64, 64), 0, 0, cv::INTER_LINEAR);
+
+	// 2단계: Grayscale 변환
+	cv::Mat gray;
+	cv::cvtColor(resized, gray, cv::COLOR_BGR2GRAY);
+
+	// 3단계: uint8 [0,255] → int8 양자화
+	// Edge Impulse 표준: 0-255를 -128~127로 매핑
+	std::vector<int8_t> input_data(64 * 64);
+
+	for (int i = 0; i < 64 * 64; i++) {
+		uint8_t pixel = gray.data[i];
+		// 방식 1: 단순 매핑 (pixel - 128)
+		input_data[i] = static_cast<int8_t>(static_cast<int16_t>(pixel) - 128);
 	}
 
-	// Display on Picture Control
-	CStatic* pPicCtrl = (CStatic*)GetDlgItem(IDC_PIC_IMG);
-	if (pPicCtrl) {
-		pPicCtrl->SetBitmap(hBitmap);
-	} else {
-		DeleteObject(hBitmap);
+	printf("Preprocessing complete: 64x64 grayscale converted to INT8\n");
+	printf("Sample input values (첫 10개): ");
+	for (int i = 0; i < 10; i++) {
+		printf("%d ", input_data[i]);
 	}
+	printf("\n");
+
+	return input_data;
+}
+
+// 추론 결과 기반 선택적 Blur 처리 함수
+// 입력: 원본 이미지, runInference의 output (8x8 확률값), threshold
+// 출력: blur 처리된 이미지
+cv::Mat BlurImageByHeatmap(const cv::Mat& original_image, const std::vector<float>& output_probs, float threshold)
+{
+	if (original_image.empty()) {
+		fprintf(stderr, "Error: Empty original image\n");
+		return cv::Mat();
+	}
+
+	if (output_probs.size() != 64) {
+		fprintf(stderr, "Error: Output size mismatch (expected 64, got %zu)\n", output_probs.size());
+		return cv::Mat();
+	}
+
+	cv::Mat result = original_image.clone();
+
+	// 8x8 heatmap을 원본 이미지 크기에 매핑
+	int heatmap_size = 8;
+	int cell_width = original_image.cols / heatmap_size;   // 원본 이미지 가로 크기 / 8
+	int cell_height = original_image.rows / heatmap_size;  // 원본 이미지 세로 크기 / 8
+
+	printf("Original image size: %d x %d\n", original_image.cols, original_image.rows);
+	printf("Cell size: %d x %d\n", cell_width, cell_height);
+
+	for (int h_row = 0; h_row < heatmap_size; h_row++) {
+		for (int h_col = 0; h_col < heatmap_size; h_col++) {
+			float prob = output_probs[h_row * heatmap_size + h_col];
+
+			// 확률이 threshold 이상인 영역만 blur 처리
+			if (prob >= threshold) {
+				// 원본 이미지 좌표로 변환
+				int x_start = h_col * cell_width;
+				int y_start = h_row * cell_height;
+				int x_end = x_start + cell_width;
+				int y_end = y_start + cell_height;
+
+				// 경계 체크
+				x_start = std::max(0, x_start);
+				y_start = std::max(0, y_start);
+				x_end = std::min(result.cols, x_end);
+				y_end = std::min(result.rows, y_end);
+
+				// ROI(Region of Interest) 추출 및 blur 처리
+				if (x_end > x_start && y_end > y_start) {
+					cv::Rect roi(x_start, y_start, x_end - x_start, y_end - y_start);
+					cv::Mat roi_image = result(roi);
+
+					// 최강 Gaussian blur 적용 (매우 큰 커널 + 높은 sigma)
+					cv::GaussianBlur(roi_image, roi_image, cv::Size(51, 51), 10.0);
+					cv::GaussianBlur(roi_image, roi_image, cv::Size(51, 51), 10.0);  // 2회 적용
+				}
+			}
+		}
+	}
+
+	printf("Image blur processing complete (threshold: %.2f)\n", threshold);
+	return result;
 }

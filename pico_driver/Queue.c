@@ -78,28 +78,28 @@ PicoInferenceReadComplete(
 
     if (NT_SUCCESS(status)) {
         // Get output memory to access the read data
-        //WDFMEMORY outputMemory = NULL;
-        //NTSTATUS retrieveStatus = WdfRequestRetrieveOutputMemory(Request, &outputMemory);
+        WDFMEMORY outputMemory = NULL;
+        NTSTATUS retrieveStatus = WdfRequestRetrieveOutputMemory(Request, &outputMemory);
 
-        //if (NT_SUCCESS(retrieveStatus)) {
-        //    // Get buffer pointer
-        //    PUCHAR pData = (PUCHAR)WdfMemoryGetBuffer(outputMemory, NULL);
+        if (NT_SUCCESS(retrieveStatus)) {
+            // Get buffer pointer
+            PUCHAR pData = (PUCHAR)WdfMemoryGetBuffer(outputMemory, NULL);
 
-        //    // Log the read data in hex format (16 bytes per line)
-        //    DbgPrint("[pico_driver] Inference result data (%llu bytes):\n", (ULONGLONG)bytesRead);
-        //    for (ULONG_PTR i = 0; i < bytesRead && i < 256; i++) {
-        //        if (i % 16 == 0) {
-        //            DbgPrint("[pico_driver] %04llX: ", (ULONGLONG)i);
-        //        }
-        //        DbgPrint("%02X ", pData[i]);
-        //        if ((i + 1) % 16 == 0) {
-        //            DbgPrint("\n");
-        //        }
-        //    }
-        //    if (bytesRead % 16 != 0) {
-        //        DbgPrint("\n");
-        //    }
-        //}
+            // Log the read data in hex format (16 bytes per line)
+            DbgPrint("[pico_driver] Inference result data (%llu bytes):\n", (ULONGLONG)bytesRead);
+            for (ULONG_PTR i = 0; i < bytesRead && i < 64; i++) {
+                if (i % 16 == 0) {
+                    DbgPrint("[pico_driver] %04llX: ", (ULONGLONG)i);
+                }
+                DbgPrint("%02X ", pData[i]);
+                if ((i + 1) % 16 == 0) {
+                    DbgPrint("\n");
+                }
+            }
+            if (bytesRead % 16 != 0) {
+                DbgPrint("\n");
+            }
+        }
 
         // Set the number of bytes returned to client
         WdfRequestSetInformation(Request, bytesRead);
