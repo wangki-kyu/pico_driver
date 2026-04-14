@@ -5,6 +5,8 @@
 #pragma once
 #include <opencv2/core.hpp>
 
+#define WM_INTERRUPT_DATA (WM_USER + 100)
+
 
 // CpicotestmfcDlg 대화 상자
 class CpicotestmfcDlg : public CDialogEx
@@ -45,6 +47,13 @@ public:
 	afx_msg void OnBnClickedBtnModelLoad();
 	afx_msg void OnBnClickedBtnImageLoad();
 
+private:	// data
+	OVERLAPPED m_overlapped;
+	HANDLE m_hInterruptEvent;
+	BYTE m_interruptBuf[3];
+	HANDLE m_hWaitThread;
+
+
 private:
 	void DisplayImageOnControl(const cv::Mat& img);
 	void ParseAndApplyBlur(const cv::Mat& originalImg, PUCHAR pOutBuffer,
@@ -53,4 +62,11 @@ private:
 	cv::Mat LoadImageFromFile(const char* imagePath);
 	std::vector<int8_t> PreprocessImageToInt8(const cv::Mat& rgbImage);
 	cv::Mat BlurImageByHeatmap(const cv::Mat& original_image, const std::vector<float>& output_probs, float threshold);
+
+	// Interrupt read
+	void InitInterruptRead();
+	void SubmitInterruptRead();
+	void CleanupInterruptRead();
+	static VOID CALLBACK InterruptCallback(PVOID lpParam, BOOLEAN timedOut);
+	afx_msg LRESULT OnInterruptData(WPARAM wParam, LPARAM lParam);
 };

@@ -27,6 +27,7 @@ typedef struct _DEVICE_CONTEXT
     WDFUSBPIPE WritePipe;
     WDFUSBPIPE ReadPipe;
     WDFUSBPIPE InterruptReadPipe;
+    WDFQUEUE PendingQueue;
     ULONG PrivateDeviceData;  // just a placeholder
 
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;

@@ -53,7 +53,35 @@ Return Value:
 --*/
 {
     UNREFERENCED_PARAMETER(Pipe);
-    UNREFERENCED_PARAMETER(Context);
+
+    PDEVICE_CONTEXT pDeviceContext = (PDEVICE_CONTEXT)Context;
+    WDFREQUEST request;
+    PVOID outBuffer;
+    NTSTATUS status;
+
+    if (NumBytesTransferred == 0) {
+        return;
+    }
+
+    //DbgPrint("[picodriverEvtInterruptReadComplete] Interrupt data received (%zu bytes)\n", NumBytesTransferred);
+
+    // Pending 요청 없으면 그냥 버림 (아무도 안 듣고 있는 것)
+    status = WdfIoQueueRetrieveNextRequest(pDeviceContext->PendingQueue, &request);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[picodriverEvtInterruptReadComplete] No pending request, discarding data\n");
+        return;
+    }
+
+    // App의 output buffer에 interrupt 데이터 복사
+    status = WdfRequestRetrieveOutputBuffer(request, NumBytesTransferred, &outBuffer, NULL);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[picodriverEvtInterruptReadComplete] WdfRequestRetrieveOutputBuffer failed 0x%x\n", status);
+        WdfRequestComplete(request, status);
+        return;
+    }
+
+    RtlCopyMemory(outBuffer, WdfMemoryGetBuffer(Buffer, NULL), NumBytesTransferred);
+    WdfRequestCompleteWithInformation(request, STATUS_SUCCESS, NumBytesTransferred);
 
     if (NumBytesTransferred > 0) {
         // Process interrupt data
@@ -294,32 +322,31 @@ Return Value:
 {
     WDFQUEUE queue;
     NTSTATUS status;
-    WDF_IO_QUEUE_CONFIG    queueConfig;
+    WDF_IO_QUEUE_CONFIG queueConfig;
+    PDEVICE_CONTEXT pDeviceContext;
 
     PAGED_CODE();
-    
-    //
-    // Configure a default queue so that requests that are not
-    // configure-fowarded using WdfDeviceConfigureRequestDispatching to goto
-    // other queues get dispatched here.
-    //
-    WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(
-         &queueConfig,
-        WdfIoQueueDispatchParallel
-        );
 
+    // Default queue for IOCTL dispatch
+    WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&queueConfig, WdfIoQueueDispatchParallel);
     queueConfig.EvtIoDeviceControl = picodriverEvtIoDeviceControl;
     queueConfig.EvtIoStop = picodriverEvtIoStop;
 
-    status = WdfIoQueueCreate(
-                 Device,
-                 &queueConfig,
-                 WDF_NO_OBJECT_ATTRIBUTES,
-                 &queue
-                 );
-
-    if( !NT_SUCCESS(status) ) {
+    status = WdfIoQueueCreate(Device, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &queue);
+    if (!NT_SUCCESS(status)) {
         DbgPrint("[pico_driver] WdfIoQueueCreate failed 0x%x\n", status);
+        return status;
+    }
+
+    // Manual queue: App의 IOCTL_PICO_READ_INTERRUPT 요청을 보관
+    // interrupt 데이터 도착 시 꺼내서 완성시킴
+    WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
+
+    pDeviceContext = DeviceGetContext(Device);
+
+    status = WdfIoQueueCreate(Device, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &pDeviceContext->PendingQueue);
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[pico_driver] PendingQueue WdfIoQueueCreate failed 0x%x\n", status);
         return status;
     }
 
@@ -780,6 +807,29 @@ Return Value:
             // Asynchronous - completion will be handled by PicoInferenceWriteComplete callback
             // which will then trigger PicoInferenceReadComplete
             DbgPrint("[pico_driver] Inference write request sent successfully\n");
+            return;
+        }
+
+        case IOCTL_PICO_READ_INTERRUPT: {
+            DbgPrint("[pico_driver] IOCTL_PICO_READ_INTERRUPT received - forwarding to PendingQueue\n");
+
+            if (pDeviceContext->PendingQueue == NULL) {
+                DbgPrint("[pico_driver] ERROR: PendingQueue is NULL\n");
+                status = STATUS_DEVICE_NOT_READY;
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // Request를 PendingQueue에 보관
+            // interrupt 데이터 도착 시 picodriverEvtInterruptReadComplete에서 꺼내서 완성
+            status = WdfRequestForwardToIoQueue(Request, pDeviceContext->PendingQueue);
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("[pico_driver] ERROR: WdfRequestForwardToIoQueue failed 0x%x\n", status);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+
+            // 완성은 interrupt callback에서 하므로 여기서 Complete 호출 안 함
             return;
         }
 

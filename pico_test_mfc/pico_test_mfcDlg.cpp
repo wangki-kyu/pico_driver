@@ -84,6 +84,7 @@ BEGIN_MESSAGE_MAP(CpicotestmfcDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BTN_DMA_LED_OFF, &CpicotestmfcDlg::OnBnClickedBtnDmaLedOff)
 	ON_BN_CLICKED(IDC_BTN_MODEL_LOAD, &CpicotestmfcDlg::OnBnClickedBtnModelLoad)
 	ON_BN_CLICKED(IDC_BTN_IMAGE_LOAD, &CpicotestmfcDlg::OnBnClickedBtnImageLoad)
+	ON_MESSAGE(WM_INTERRUPT_DATA, &CpicotestmfcDlg::OnInterruptData)
 END_MESSAGE_MAP()
 
 
@@ -123,6 +124,7 @@ BOOL CpicotestmfcDlg::OnInitDialog()
 
 	if (m_hDevice != INVALID_HANDLE_VALUE) {
 		MessageBox(_T("Pico driver device found and opened successfully!"), _T("Success"));
+		InitInterruptRead();
 	} else {
 		MessageBox(_T("Failed to find or open the pico driver device."), _T("Error"));
 	}
@@ -184,8 +186,11 @@ void CpicotestmfcDlg::OnDestroy()
 {
 	CDialogEx::OnDestroy();
 
+	CleanupInterruptRead();
+
 	if (m_hDevice != INVALID_HANDLE_VALUE) {
 		CloseHandle(m_hDevice);
+		m_hDevice = INVALID_HANDLE_VALUE;
 	}
 }
 
@@ -1002,4 +1007,88 @@ cv::Mat CpicotestmfcDlg::BlurImageByHeatmap(const cv::Mat& original_image, const
 
 	printf("Image blur processing complete (threshold: %.2f)\n", threshold);
 	return result;
+}
+
+// interrupt 초기화 함수 
+void CpicotestmfcDlg::InitInterruptRead()
+{
+	memset(&m_overlapped, 0, sizeof(m_overlapped));
+	m_overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	m_hWaitThread = NULL;
+
+	SubmitInterruptRead();
+}
+
+void CpicotestmfcDlg::SubmitInterruptRead()
+{
+	DWORD bytesReturned = 0;
+	ResetEvent(m_overlapped.hEvent);
+
+	BOOL result = DeviceIoControl(
+		m_hDevice,
+		IOCTL_PICO_READ_INTERRUPT,
+		NULL, 0,
+		m_interruptBuf, sizeof(m_interruptBuf),
+		&bytesReturned,
+		&m_overlapped
+	);
+
+	if (!result && GetLastError() != ERROR_IO_PENDING) {
+		return;
+	}
+
+	// hEvent가 시그널되면 InterruptCallback 호출 (Windows ThreadPool)
+	RegisterWaitForSingleObject(
+		&m_hWaitThread,
+		m_overlapped.hEvent,
+		InterruptCallback,
+		this,
+		INFINITE,
+		WT_EXECUTEDEFAULT | WT_EXECUTEONLYONCE
+	);
+}
+
+VOID CALLBACK CpicotestmfcDlg::InterruptCallback(PVOID lpParam, BOOLEAN)
+{
+	CpicotestmfcDlg* pDlg = (CpicotestmfcDlg*)lpParam;
+
+	DWORD bytesTransferred = 0;
+	if (!GetOverlappedResult(pDlg->m_hDevice, &pDlg->m_overlapped, &bytesTransferred, FALSE)) {
+		return;
+	}
+
+	// 0xBB: Pico interrupt marker, [1]: 정수부, [2]: 소수부
+	if (bytesTransferred >= 3 && pDlg->m_interruptBuf[0] == 0xBB) {
+		WPARAM wParam = MAKEWPARAM(pDlg->m_interruptBuf[2], pDlg->m_interruptBuf[1]);
+		pDlg->PostMessage(WM_INTERRUPT_DATA, wParam, 0);
+	}
+
+	// 다음 read 등록 (루프)
+	UnregisterWait(pDlg->m_hWaitThread);
+	pDlg->m_hWaitThread = NULL;
+	pDlg->SubmitInterruptRead();
+}
+
+LRESULT CpicotestmfcDlg::OnInterruptData(WPARAM wParam, LPARAM)
+{
+	BYTE intPart  = (BYTE)HIWORD(wParam);  // buf[1] = 정수부
+	BYTE fracPart = (BYTE)LOWORD(wParam);  // buf[2] = 소수부
+
+	CString tempStr;
+	tempStr.Format(_T("%d.%02d °C"), intPart, fracPart);
+	GetDlgItem(IDC_EDIT2)->SetWindowText(tempStr);
+
+	return 0;
+}
+
+void CpicotestmfcDlg::CleanupInterruptRead()
+{
+	if (m_hWaitThread) {
+		UnregisterWaitEx(m_hWaitThread, INVALID_HANDLE_VALUE);
+		m_hWaitThread = NULL;
+	}
+	if (m_overlapped.hEvent) {
+		CloseHandle(m_overlapped.hEvent);
+		m_overlapped.hEvent = NULL;
+	}
 }

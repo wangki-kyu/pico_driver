@@ -16,6 +16,7 @@
 #define IDC_BTN_MODEL_LOAD              1006
 #define IDC_BTN_IMAGE_LOAD              1007
 #define IDC_PIC_IMG                     1008
+#define IDC_EDIT2                       1009
 
 // Next default values for new objects
 // 
