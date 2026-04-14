@@ -22,6 +22,62 @@ Environment:
 #endif
 
 VOID
+picodriverEvtInterruptReadComplete(
+    _In_ WDFUSBPIPE Pipe,
+    _In_ WDFMEMORY Buffer,
+    _In_ size_t NumBytesTransferred,
+    _In_ WDFCONTEXT Context
+    )
+/*++
+
+Routine Description:
+
+    Completion callback for interrupt endpoint continuous read.
+    WDF automatically handles request resubmission.
+    We just need to process the received interrupt data.
+
+Arguments:
+
+    Pipe - The USB pipe
+
+    Buffer - The data buffer from continuous reader
+
+    NumBytesTransferred - Number of bytes in the buffer
+
+    Context - Device context
+
+Return Value:
+
+    VOID
+
+--*/
+{
+    UNREFERENCED_PARAMETER(Pipe);
+    UNREFERENCED_PARAMETER(Context);
+
+    if (NumBytesTransferred > 0) {
+        // Process interrupt data
+        PUCHAR pData = (PUCHAR)WdfMemoryGetBuffer(Buffer, NULL);
+
+        DbgPrint("[picodriverEvtInterruptReadComplete] Interrupt data received (%zu bytes):\n", NumBytesTransferred);
+        for (size_t i = 0; i < NumBytesTransferred && i < 32; i++) {
+            if (i % 16 == 0) {
+                DbgPrint("[interrupt] %04lX: ", (ULONG)i);
+            }
+            DbgPrint("%02X ", pData[i]);
+            if ((i + 1) % 16 == 0) {
+                DbgPrint("\n");
+            }
+        }
+        if (NumBytesTransferred % 16 != 0) {
+            DbgPrint("\n");
+        }
+    }
+
+    // No need to resubmit - WDF continuous reader handles it automatically
+}
+
+VOID
 PicoDmaWriteComplete(
     _In_ WDFREQUEST Request,
     _In_ WDFIOTARGET Target,

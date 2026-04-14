@@ -44,4 +44,9 @@ EVT_WDF_IO_QUEUE_IO_STOP picodriverEvtIoStop;
 //
 EVT_WDF_REQUEST_COMPLETION_ROUTINE PicoDmaWriteComplete;
 
+//
+// Interrupt read completion routine (for continuous reader)
+//
+EVT_WDF_USB_READER_COMPLETION_ROUTINE picodriverEvtInterruptReadComplete;
+
 EXTERN_C_END

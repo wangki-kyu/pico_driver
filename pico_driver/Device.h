@@ -26,6 +26,7 @@ typedef struct _DEVICE_CONTEXT
     WDFUSBINTERFACE UsbInterface;
     WDFUSBPIPE WritePipe;
     WDFUSBPIPE ReadPipe;
+    WDFUSBPIPE InterruptReadPipe;
     ULONG PrivateDeviceData;  // just a placeholder
 
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;
@@ -50,5 +51,19 @@ picodriverCreateDevice(
 // handle
 //
 EVT_WDF_DEVICE_PREPARE_HARDWARE picodriverEvtDevicePrepareHardware;
+
+//
+// Function for device release/cleanup
+//
+EVT_WDF_DEVICE_RELEASE_HARDWARE picodriverEvtDeviceReleaseHardware;
+
+//
+// Function to start continuous interrupt read
+//
+NTSTATUS
+picodriverStartInterruptRead(
+    _In_ WDFDEVICE Device,
+    _In_ PDEVICE_CONTEXT DeviceContext
+    );
 
 EXTERN_C_END

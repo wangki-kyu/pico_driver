@@ -19,8 +19,16 @@ Environment:
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (PAGE, picodriverCreateDevice)
 #pragma alloc_text (PAGE, picodriverEvtDevicePrepareHardware)
+#pragma alloc_text (PAGE, picodriverEvtDeviceReleaseHardware)
 #endif
 
+
+// Forward declarations
+NTSTATUS
+picodriverStartInterruptRead(
+    _In_ WDFDEVICE Device,
+    _In_ PDEVICE_CONTEXT DeviceContext
+    );
 
 NTSTATUS
 picodriverCreateDevice(
@@ -54,6 +62,7 @@ Return Value:
 
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpPowerCallbacks);
     pnpPowerCallbacks.EvtDevicePrepareHardware = picodriverEvtDevicePrepareHardware;
+    pnpPowerCallbacks.EvtDeviceReleaseHardware = picodriverEvtDeviceReleaseHardware;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpPowerCallbacks);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&deviceAttributes, DEVICE_CONTEXT);
@@ -227,8 +236,14 @@ Return Value:
 
                 // Store bulk IN and OUT pipes
                 if (USB_ENDPOINT_DIRECTION_IN(pipeInfo.EndpointAddress)) {
-                    pDeviceContext->ReadPipe = pipe;
-                    DbgPrint("Stored READ pipe (IN endpoint 0x%02x)\n", pipeInfo.EndpointAddress);
+                    if (pipeInfo.EndpointAddress == 0x83) {
+                        pDeviceContext->ReadPipe = pipe;
+                        DbgPrint("Stored READ pipe (IN endpoint 0x%02x)\n", pipeInfo.EndpointAddress);
+                    }
+                    else if (pipeInfo.EndpointAddress == 0x84) {
+                        pDeviceContext->InterruptReadPipe = pipe;
+                        DbgPrint("Stored Interrupt READ pipe (IN endpoint 0x%02x)\n", pipeInfo.EndpointAddress);
+                    }
                 }
                 else {
                     pDeviceContext->WritePipe = pipe;
@@ -247,9 +262,132 @@ Return Value:
         }
 
         DbgPrint("SUCCESS: Both pipes configured\n");
+
+        // Start continuous interrupt read
+        if (pDeviceContext->InterruptReadPipe != NULL) {
+            status = picodriverStartInterruptRead(Device, pDeviceContext);
+            if (!NT_SUCCESS(status)) {
+                DbgPrint("WARNING: Failed to start interrupt read: 0x%x\n", status);
+                // Don't fail device initialization for interrupt read failure
+                status = STATUS_SUCCESS;
+            }
+        }
     }
 
     DbgPrint("[%s] Exit\n", __FUNCTION__);
 
     return status;
+}
+
+NTSTATUS
+picodriverStartInterruptRead(
+    _In_ WDFDEVICE Device,
+    _In_ PDEVICE_CONTEXT DeviceContext
+    )
+/*++
+
+Routine Description:
+
+    Start continuous interrupt read on the interrupt endpoint.
+    Uses WdfUsbTargetPipeConfigContinuousReader for automatic request resubmission.
+
+Arguments:
+
+    Device - Device handle
+
+    DeviceContext - Device context pointer
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    UNREFERENCED_PARAMETER(Device);
+    NTSTATUS status;
+    WDF_USB_CONTINUOUS_READER_CONFIG readerConfig;
+    ULONG bufferSize = 64;  // Typical interrupt endpoint size
+
+    DbgPrint("[picodriverStartInterruptRead] Starting interrupt continuous reader\n");
+
+    // Configure continuous reader
+    WDF_USB_CONTINUOUS_READER_CONFIG_INIT(&readerConfig,
+                                         picodriverEvtInterruptReadComplete,
+                                         DeviceContext,
+                                         bufferSize);
+
+    // Set number of reader buffers (WDF will manage multiple buffers)
+    readerConfig.NumPendingReads = 2;
+
+    // Start the continuous reader (configure it first)
+    status = WdfUsbTargetPipeConfigContinuousReader(
+        DeviceContext->InterruptReadPipe,
+        &readerConfig
+    );
+
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[picodriverStartInterruptRead] WdfUsbTargetPipeConfigContinuousReader failed 0x%x\n", status);
+        return status;
+    }
+
+    DbgPrint("[picodriverStartInterruptRead] Continuous reader configured\n");
+
+    // CRITICAL: Start the I/O target to actually begin polling the interrupt endpoint
+    // Without this, the host will NOT send IN tokens to the device
+    status = WdfIoTargetStart(WdfUsbTargetPipeGetIoTarget(DeviceContext->InterruptReadPipe));
+
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[picodriverStartInterruptRead] WdfIoTargetStart failed 0x%x\n", status);
+        return status;
+    }
+
+    DbgPrint("[picodriverStartInterruptRead] I/O Target started - polling interrupt endpoint (0x84)\n");
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+picodriverEvtDeviceReleaseHardware(
+    _In_ WDFDEVICE Device,
+    _In_ WDFCMRESLIST ResourcesTranslated
+    )
+/*++
+
+Routine Description:
+
+    Cleanup routine called when device is being removed.
+    WDF continuous reader is automatically stopped by the framework.
+
+Arguments:
+
+    Device - handle to a device
+
+    ResourcesTranslated - translated resources
+
+Return Value:
+
+    NTSTATUS
+
+--*/
+{
+    UNREFERENCED_PARAMETER(Device);
+    UNREFERENCED_PARAMETER(ResourcesTranslated);
+
+    PAGED_CODE();
+
+    PDEVICE_CONTEXT pDeviceContext;
+
+    DbgPrint("[%s] Entry\n", __FUNCTION__);
+
+    pDeviceContext = DeviceGetContext(Device);
+
+    // Stop the I/O target for interrupt pipe if it was started
+    if (pDeviceContext->InterruptReadPipe != NULL) {
+        DbgPrint("[%s] Stopping interrupt pipe I/O target\n", __FUNCTION__);
+        WdfIoTargetStop(WdfUsbTargetPipeGetIoTarget(pDeviceContext->InterruptReadPipe),
+                       WdfIoTargetCancelSentIo);
+    }
+
+    DbgPrint("[%s] Exit\n", __FUNCTION__);
+
+    return STATUS_SUCCESS;
 }
