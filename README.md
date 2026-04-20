@@ -199,9 +199,18 @@ finally:
 - SDK Layer 구축: `DeviceIoControl`을 추상화하여 사용자에게 `led_on()`, `run_inference()`등 직관적인 API를 제공하는 Wrapper DLL 개발
 - Native NPU Driver 개발: 본 프로젝트에서 검증된 KMDF 아키텍처를 바탕으로 실제 AI 가속기 전용 드라이버로 확장 개발 예정(USB -> PCIe)
 
+---
+
 ## 라이센스
 
 프로젝트 라이센스 정보는 프로젝트 루트 디렉토리 확인
+
+---
+
+## pico mcu source 
+https://github.com/wangki-kyu/pico_usb_vendor
+
+---
 
 ## 참고자료
 
