@@ -40,6 +40,15 @@
 
 ---
 
+## Kernel Debugging Setting (WinDbg)
+드라이버의 안정성 확보 및 런타임 분석을 위해 아래와 같은 디버깅 환경을 구축하여 테스트를 진행
+Oracle VirtualBox 사용 
+
+자세한 세팅 아래 블로그 참조  
+https://velog.io/@wang_ki/windbg-kernel-debugging-환경-세팅
+
+---
+
 ## 프로젝트 구조
 
 ```
@@ -187,8 +196,8 @@ finally:
 ---
 
 ## 다음 목표 
-- 상위 어플리케이션에서 직접 `DeviceIoControl`을 호출하는 것이 아닌 추상화된 `led_on`, `led_off` 등 함수를 호출하여 사용하도록 래핑 dll을 만든다.
-- 실제 하드웨어 가속기 driver를 개발 
+- SDK Layer 구축: `DeviceIoControl`을 추상화하여 사용자에게 `led_on()`, `run_inference()`등 직관적인 API를 제공하는 Wrapper DLL 개발
+- Native NPU Driver 개발: 본 프로젝트에서 검증된 KMDF 아키텍처를 바탕으로 실제 AI 가속기 전용 드라이버로 확장 개발 예정(USB -> PCIe)
 
 ## 라이센스
 
