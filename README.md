@@ -1,9 +1,32 @@
-# Pico Driver
+# Pico Driver: KMDF 기반 외장형 연산 가속 시스템
 
-Raspberry Pi Pico와 PC를 USB로 연결하여 센서 데이터를 읽고 머신러닝 추론을 수행하는 Windows KMDF 기반 드라이버입니다.
+본 프로젝트는 **Raspberry Pi Pico**를 활용하여 Windows 환경에서 특정 연산을 분담하는 외장형 가속기 인터페이스를 구현한 프로젝트입니다. 범용 MCU의 한계를 커널 수준의 드라이버 설계로 보완하여 
+고속 데이터 전송 및 실시간 제어 파이프라인을 구축했습니다. 
+와 PC를 USB로 연결하여 센서 데이터를 읽고 머신러닝 추론을 수행하는 Windows KMDF 기반 드라이버입니다.
 
 작성할 내용 
 - kernel debugging setting 하기
+
+---
+
+## 핵심 기술 스택(Core Tech Stack)
+
+- Kernel Architecture: Windows Driver Foundation(KMDF) 기반 드라이버 설계 및 I/O 큐 관리
+- Memory Management: **Direct I/O 및 MDL(Memory Descriptor List)**을 활용한 제로 카피 지향 데이터 전송
+- Hardware Interface: USB Bulk/Interrupt 엔드포인트 통신
+- Edge AI: TinyML(TensorFlow Lite for Microcontroller) 기반 FOMO 얼굴 감지 모델 이식
+- Vision Processing: OpenCV 4.12.0 및 MFC를 활용한 호스트 어플리케이션 개발
+
+---
+
+## 시스템 아키텍처 및 설계 의도
+
+1. MCU를 가속기로 활용하기 위한 전략
+   일반적인 NPU와 달리 병렬 연산 최적화가 부족한 MCU의 구조적 차이를 인정하고 실제 NPU를 연동하기 전
+   windows의 커널과 driver에 대한 이해를 위한 설계
+2. 고속 데이터 전송: Direct I/O & MDL  
+   MCU 하드웨어의 한계로 대용량 데이터를 처리할 수 없지만 CPU의 오버헤드를 최소화하기 위해 `METHOD_BUFFERED` 대신 `DIRECT I/O` 방식을 채택
+   커널 내 불필요한 메모리 복사를 제거하여 호스트 PC의 자원 점유율을 최적화 
 
 ---
 
@@ -140,6 +163,7 @@ finally:
 ---
 
 ## 블로그 작성 
+이슈 및 기록을 위한 기술 블로그 작성 
 > https://velog.io/@wang_ki/series/windows-driver
 
 ---
