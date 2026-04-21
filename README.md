@@ -4,9 +4,6 @@
 고속 데이터 전송 및 실시간 제어 파이프라인을 구축했습니다. 
 와 PC를 USB로 연결하여 센서 데이터를 읽고 머신러닝 추론을 수행하는 Windows KMDF 기반 드라이버입니다.
 
-작성할 내용 
-- kernel debugging setting 하기
-
 ---
 
 ## 핵심 기술 스택(Core Tech Stack)
